@@ -27,7 +27,9 @@ import {
   EyeOff,
   Trash2,
   MoreVertical,
-  Camera
+  Camera,
+  Layout,
+  Maximize2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -91,26 +93,33 @@ type SortOrder = 'asc' | 'desc';
 
 // --- Components ---
 
+interface ComparisonRowProps {
+  result: ComparisonResult;
+  onPreview: (res: ComparisonResult) => void;
+  isSelected: boolean;
+  onSelect: (upc: string) => void;
+  style?: React.CSSProperties;
+  density?: 'compact' | 'standard' | 'large';
+}
+
 const ComparisonRow = React.memo(({ 
   result, 
   onPreview,
   isSelected,
   onSelect,
-  style
-}: { 
-  result: ComparisonResult; 
-  onPreview: (res: ComparisonResult) => void;
-  isSelected: boolean;
-  onSelect: (upc: string) => void;
-  style?: React.CSSProperties;
-}) => {
+  style,
+  density = 'standard'
+}: ComparisonRowProps) => {
   const isChanged = result.hasChanged;
   
   return (
     <div 
-      style={style}
+      style={{
+        ...style,
+        height: style?.height || 'auto'
+      }}
       className={cn(
-        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors",
+        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden",
         isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/5" : "hover:bg-slate-50/50"
       )}
       id={`row-${result.upc}`}
@@ -129,19 +138,24 @@ const ComparisonRow = React.memo(({
       </div>
 
       {/* UPC / Meta */}
-      <div className="px-6 py-4 flex flex-col justify-center border-r border-slate-100 italic">
-        <span className="text-sm font-bold text-slate-900 font-mono tracking-tight">{result.upc}</span>
-        <div className="flex items-center gap-1.5 mt-1">
-          <span className="text-[10px] text-slate-400 font-mono">ID: {result.current?.TABLE_ID || result.previous?.TABLE_ID}</span>
-          {result.auditStatus !== 'pending' && (
-            <span className={cn(
-              "text-[8px] px-1 rounded font-bold uppercase",
-              result.auditStatus === 'reviewed' ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
-            )}>
-              {result.auditStatus}
-            </span>
-          )}
-        </div>
+      <div className="px-6 py-2 flex flex-col justify-center border-r border-slate-100 italic">
+        <span className={cn(
+          "font-bold text-slate-900 font-mono tracking-tight",
+          density === 'compact' ? "text-xs" : "text-sm"
+        )}>{result.upc}</span>
+        {density !== 'compact' && (
+          <div className="flex items-center gap-1.5 mt-1">
+            <span className="text-[10px] text-slate-400 font-mono">ID: {result.current?.TABLE_ID || result.previous?.TABLE_ID}</span>
+            {result.auditStatus !== 'pending' && (
+              <span className={cn(
+                "text-[8px] px-1 rounded font-bold uppercase",
+                result.auditStatus === 'reviewed' ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+              )}>
+                {result.auditStatus}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Previous Version */}
@@ -241,6 +255,13 @@ export default function App() {
   const [userStatus, setUserStatus] = useState<Record<string, 'pending' | 'reviewed' | 'ignored'>>({});
   const [selectedUpcs, setSelectedUpcs] = useState<Set<string>>(new Set());
   const [listHeight, setListHeight] = useState(window.innerHeight - 250);
+  const [rowDensity, setRowDensity] = useState<'compact' | 'standard' | 'large'>('standard');
+
+  const rowHeights = {
+    compact: 64,
+    standard: 110,
+    large: 200
+  };
 
   const clearAll = () => {
     setPrevData(null);
@@ -446,16 +467,27 @@ export default function App() {
     XLSX.writeFile(wb, `Image_Audit_${mode.toUpperCase()}_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
+  const getBase64Image = async (url: string): Promise<string | null> => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  };
+
   const exportPDF = async () => {
     setIsProcessing(true);
     try {
       const doc = new jsPDF('p', 'mm', 'a4');
-      const resultsToExport = filteredResults.slice(0, 50); // Safety limit for PDF size
+      const resultsToExport = filteredResults.slice(0, 50);
       
-      // Styles
-      const primaryColor = [15, 23, 42]; // slate-900
-      const accentColor = [37, 99, 235]; // blue-600
-      
+      const primaryColor = [15, 23, 42];
       doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
       doc.rect(0, 0, 210, 40, 'F');
       
@@ -472,54 +504,58 @@ export default function App() {
       let y = 50;
       
       for (const item of resultsToExport) {
-        if (y > 250) {
+        if (y > 220) {
           doc.addPage();
           y = 20;
         }
 
-        // Row background
         doc.setFillColor(248, 250, 252);
-        doc.rect(15, y, 180, 35, 'F');
+        doc.rect(15, y, 180, 55, 'F'); // Increased height for image area
         doc.setDrawColor(226, 232, 240);
-        doc.rect(15, y, 180, 35, 'S');
+        doc.rect(15, y, 180, 55, 'S');
 
-        // UPC
         doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
         doc.setFontSize(10);
         doc.setFont("helvetica", "bold");
         doc.text(`UPC: ${item.upc}`, 20, y + 8);
         
-        // Status Badge
-        const statusText = item.auditStatus.toUpperCase();
         doc.setFontSize(7);
-        doc.text(`AUDIT STATE: ${statusText}`, 20, y + 14);
+        doc.text(`AUDIT STATE: ${item.auditStatus.toUpperCase()}`, 20, y + 14);
         
-        // Change info
         if (item.hasChanged) {
           doc.setTextColor(220, 38, 38);
           doc.text(`CHANGES: ${item.changes.join(', ')}`, 20, y + 18);
         }
 
-        // Columns
+        // Images in PDF
+        const prevImg = await getBase64Image(formatImageUrl(item.previous?.SOURCE_IMAGE_URL));
+        const currImg = await getBase64Image(formatImageUrl(item.current?.SOURCE_IMAGE_URL));
+
+        if (prevImg) {
+          try { doc.addImage(prevImg, 'JPEG', 20, y + 25, 25, 25); } catch(e) {}
+        }
+        if (currImg) {
+          try { doc.addImage(currImg, 'JPEG', 105, y + 25, 25, 25); } catch(e) {}
+        }
+
         doc.setTextColor(100, 116, 139);
-        doc.setFontSize(8);
-        doc.text('BASELINE (V1)', 20, y + 24);
-        doc.text('SCORED DATA', 105, y + 24);
+        doc.setFontSize(7);
+        doc.text('BASELINE (V1)', 50, y + 35);
+        doc.text('SCORED DATA', 135, y + 35);
         
         doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
-        doc.setFontSize(7);
-        doc.text(String(item.previous?.CSOR_IMAGE_NAME || 'EMPTY').substring(0, 55), 20, y + 29);
-        doc.text(String(item.current?.CSOR_IMAGE_NAME || 'REMOVED').substring(0, 55), 105, y + 29);
+        doc.setFontSize(6);
+        doc.text(String(item.previous?.CSOR_IMAGE_NAME || 'EMPTY').substring(0, 45), 50, y + 40);
+        doc.text(String(item.current?.CSOR_IMAGE_NAME || 'REMOVED').substring(0, 45), 135, y + 40);
 
-        // Divider
-        doc.setDrawColor(234, 179, 8); // amber border if changed
         if (item.hasChanged) {
+          doc.setDrawColor(234, 179, 8);
           doc.setLineWidth(0.5);
-          doc.line(15, y, 15, y + 35);
+          doc.line(15, y, 15, y + 55);
           doc.setLineWidth(0.2);
         }
 
-        y += 42;
+        y += 62;
       }
       
       doc.save(`Audit_Export_${new Date().toISOString().split('T')[0]}.pdf`);
@@ -610,6 +646,26 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-6">
+          {isAuditActive && (
+            <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-lg border border-slate-200">
+              {(['compact', 'standard', 'large'] as const).map(d => (
+                <button 
+                  key={d}
+                  onClick={() => setRowDensity(d)}
+                  className={cn(
+                    "p-1.5 rounded transition-all",
+                    rowDensity === d ? "bg-white shadow-sm text-blue-600" : "text-slate-400 hover:text-slate-600"
+                  )}
+                  title={`Density: ${d}`}
+                >
+                  {d === 'compact' && <Layout className="w-3.5 h-3.5 rotate-90" />}
+                  {d === 'standard' && <Columns className="w-3.5 h-3.5" />}
+                  {d === 'large' && <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="text-[10px] text-slate-500 flex gap-4 uppercase font-bold tracking-widest">
             <span>Score Match: <span className="text-emerald-600 font-mono text-[12px]">{( (stats.same / (stats.total || 1)) * 100).toFixed(1)}%</span></span>
             <span>Audit Delta: <span className="text-blue-600 font-mono text-[12px]">{( (stats.changed / (stats.total || 1)) * 100).toFixed(1)}%</span></span>
@@ -811,7 +867,7 @@ export default function App() {
                     <List
                       style={{ height: listHeight, width: '100%' }}
                       rowCount={filteredResults.length}
-                      rowHeight={100} 
+                      rowHeight={rowHeights[rowDensity]} 
                       className="no-scrollbar"
                       rowProps={{}}
                       rowComponent={({ index, style }: any) => (
@@ -821,6 +877,7 @@ export default function App() {
                           isSelected={selectedUpcs.has(filteredResults[index].upc)}
                           onSelect={handleSelect}
                           style={style}
+                          density={rowDensity}
                         />
                       )}
                     />
