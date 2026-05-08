@@ -36,9 +36,25 @@ import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { List } from 'react-window';
 
-// --- Utilities ---
+/// --- Utilities ---
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
+}
+
+/**
+ * Sanitizes image URLs to ensure they use HTTPS to avoid mixed-content blocks
+ * and handles common image hosting patterns.
+ */
+function formatImageUrl(url: string | undefined): string {
+  if (!url) return 'https://placehold.co/400?text=No+URL';
+  
+  // Force HTTPS for Cloudinary and other providers that support it
+  let sanitized = String(url).trim();
+  if (sanitized.startsWith('http://')) {
+    sanitized = sanitized.replace('http://', 'https://');
+  }
+  
+  return sanitized;
 }
 
 // --- Types ---
@@ -75,7 +91,7 @@ type SortOrder = 'asc' | 'desc';
 
 // --- Components ---
 
-const ComparisonRow = ({ 
+const ComparisonRow = React.memo(({ 
   result, 
   onPreview,
   isSelected,
@@ -134,10 +150,11 @@ const ComparisonRow = ({
           <div className="absolute inset-0 bg-gradient-to-tr from-slate-200 to-transparent opacity-20"></div>
           {result.previous ? (
             <img 
-              src={result.previous.SOURCE_IMAGE_URL} 
+              src={formatImageUrl(result.previous.SOURCE_IMAGE_URL)} 
               alt="Previous"
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain mix-blend-multiply relative z-10 p-1"
+              loading="lazy"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = 'https://placehold.co/400?text=No+Image';
               }}
@@ -167,10 +184,11 @@ const ComparisonRow = ({
         )}>
           {result.current ? (
             <img 
-              src={result.current.SOURCE_IMAGE_URL} 
+              src={formatImageUrl(result.current.SOURCE_IMAGE_URL)} 
               alt="Current"
               referrerPolicy="no-referrer"
               className="w-full h-full object-contain mix-blend-multiply p-1"
+              loading="lazy"
               onError={(e) => {
                 (e.target as HTMLImageElement).src = 'https://placehold.co/400?text=No+Image';
               }}
@@ -207,9 +225,9 @@ const ComparisonRow = ({
           </div>
         )}
       </div>
-    </div >
+    </div>
   );
-};
+});
 
 export default function App() {
   const [prevData, setPrevData] = useState<ImageItem[] | null>(null);
@@ -740,7 +758,7 @@ export default function App() {
                       rowHeight={100} 
                       className="no-scrollbar"
                       rowProps={{}}
-                      rowComponent={({ index, style }) => (
+                      rowComponent={({ index, style }: any) => (
                         <ComparisonRow 
                           result={filteredResults[index]} 
                           onPreview={(res) => setPreviewItem(res)}
@@ -824,7 +842,7 @@ export default function App() {
                   </div>
                   <div className="aspect-square bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-center overflow-hidden p-8 shadow-inner">
                     <img 
-                      src={previewItem.previous?.SOURCE_IMAGE_URL} 
+                      src={formatImageUrl(previewItem.previous?.SOURCE_IMAGE_URL)} 
                       alt="Baseline"
                       className="max-w-full max-h-full object-contain mix-blend-multiply"
                       referrerPolicy="no-referrer"
@@ -847,7 +865,7 @@ export default function App() {
                     previewItem.hasChanged ? "bg-blue-50/30 border-blue-200 ring-8 ring-blue-500/5" : "bg-slate-50 border-slate-200"
                   )}>
                     <img 
-                      src={previewItem.current?.SOURCE_IMAGE_URL} 
+                      src={formatImageUrl(previewItem.current?.SOURCE_IMAGE_URL)} 
                       alt="Target"
                       className="max-w-full max-h-full object-contain mix-blend-multiply"
                       referrerPolicy="no-referrer"
