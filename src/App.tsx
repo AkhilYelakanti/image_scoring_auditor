@@ -119,11 +119,15 @@ const ComparisonRow = React.memo(({
         height: style?.height || 'auto'
       }}
       className={cn(
-        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden",
-        isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/5" : "hover:bg-slate-50/50"
+        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden relative",
+        isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/10" : "hover:bg-slate-50/50"
       )}
       id={`row-${result.upc}`}
     >
+      {/* Change Highlight Bar */}
+      {isChanged && (
+        <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-400 z-20 shadow-[0_0_8px_rgba(251,191,36,0.5)]" />
+      )}
       {/* Selection */}
       <div className="flex items-center justify-center border-r border-slate-100">
         <button 
@@ -260,7 +264,9 @@ const ComparisonRow = React.memo(({
 export default function App() {
   const [prevData, setPrevData] = useState<ImageItem[] | null>(null);
   const [newData, setNewData] = useState<ImageItem[] | null>(null);
+  const [resultsFromWorker, setResultsFromWorker] = useState<ComparisonResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState('');
   const [isAuditActive, setIsAuditActive] = useState(false);
   const [filter, setFilter] = useState<FilterStatus>('changed');
   const [searchQuery, setSearchQuery] = useState('');
@@ -363,52 +369,35 @@ export default function App() {
     return String(val || '').trim();
   };
 
+  // Background Worker Setup
+  const workerRef = React.useRef<Worker | null>(null);
+
+  React.useEffect(() => {
+    workerRef.current = new Worker(new URL('./comparisonWorker.js', import.meta.url));
+    workerRef.current.onmessage = (e) => {
+      setResultsFromWorker(e.data);
+      setIsProcessing(false);
+      setIsAuditActive(true);
+      setProcessingProgress('');
+    };
+    return () => workerRef.current?.terminate();
+  }, []);
+
+  React.useEffect(() => {
+    if (prevData && newData) {
+      setIsProcessing(true);
+      setProcessingProgress('Analyzing 50k+ records...');
+      workerRef.current?.postMessage({ prevData, newData });
+    }
+  }, [prevData, newData]);
+
   const comparisonResults = useMemo(() => {
-    if (!prevData && !newData) return [];
-
-    const prevMap = new Map<string, ImageItem>();
-    prevData?.forEach(d => {
-      const u = getUpcValue(d);
-      if (u) prevMap.set(u, d);
-    });
-
-    const newMap = new Map<string, ImageItem>();
-    newData?.forEach(d => {
-      const u = getUpcValue(d);
-      if (u) newMap.set(u, d);
-    });
-
-    const allUpcs = new Set([
-      ...Array.from(prevMap.keys()),
-      ...Array.from(newMap.keys())
-    ]);
-
-    const results: ComparisonResult[] = Array.from(allUpcs).map(upc => {
-      const prev = prevMap.get(upc) || null;
-      const current = newMap.get(upc) || null;
-      
-      const changes: string[] = [];
-      if (prev && current) {
-        if (String(prev.CSOR_IMAGE_NAME).trim() !== String(current.CSOR_IMAGE_NAME).trim()) changes.push('IMAGE_NAME');
-        if (String(prev.SOURCE_IMAGE_URL).trim() !== String(current.SOURCE_IMAGE_URL).trim()) changes.push('URL');
-        if (String(prev.IMAGE_STATUS).trim() !== String(current.IMAGE_STATUS).trim()) changes.push('STATUS');
-        if (String(prev.PKG_NAME).trim() !== String(current.PKG_NAME).trim()) changes.push('PACKAGE');
-      } else if (prev || current) {
-        changes.push(prev ? 'DELETED' : 'CREATED');
-      }
-
-      return {
-        upc,
-        previous: prev,
-        current,
-        hasChanged: changes.length > 0,
-        changes,
-        auditStatus: userStatus[upc] || 'pending'
-      };
-    });
-
-    return results;
-  }, [prevData, newData, userStatus]);
+    if (resultsFromWorker.length === 0) return [];
+    return resultsFromWorker.map(res => ({
+      ...res,
+      auditStatus: userStatus[res.upc] || 'pending'
+    }));
+  }, [resultsFromWorker, userStatus]);
 
   const filteredResults = useMemo(() => {
     let results = [...comparisonResults];
@@ -874,9 +863,17 @@ export default function App() {
           ) : (
             <div className="h-full">
               {isProcessing && (
-                <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-[200] flex flex-col items-center justify-center">
-                  <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                  <p className="mt-4 text-xs font-bold text-slate-600 uppercase tracking-widest animate-pulse">Processing Large Dataset...</p>
+                <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-md z-[500] flex flex-col items-center justify-center text-white">
+                  <div className="relative">
+                    <div className="w-20 h-20 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin"></div>
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <RefreshCw className="w-8 h-8 text-blue-400 animate-pulse" />
+                    </div>
+                  </div>
+                  <p className="mt-8 text-sm font-black uppercase tracking-[0.3em] animate-pulse drop-shadow-lg">
+                    {processingProgress || 'Processing Dataset...'}
+                  </p>
+                  <p className="mt-2 text-[10px] text-slate-300 font-mono">Comparing large datasets. Please wait.</p>
                 </div>
               )}
 
