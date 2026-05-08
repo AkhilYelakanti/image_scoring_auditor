@@ -233,6 +233,7 @@ export default function App() {
   const [prevData, setPrevData] = useState<ImageItem[] | null>(null);
   const [newData, setNewData] = useState<ImageItem[] | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isAuditActive, setIsAuditActive] = useState(false);
   const [filter, setFilter] = useState<FilterStatus>('changed');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; order: SortOrder }>({ key: 'upc', order: 'asc' });
@@ -240,6 +241,15 @@ export default function App() {
   const [userStatus, setUserStatus] = useState<Record<string, 'pending' | 'reviewed' | 'ignored'>>({});
   const [selectedUpcs, setSelectedUpcs] = useState<Set<string>>(new Set());
   const [listHeight, setListHeight] = useState(window.innerHeight - 250);
+
+  const clearAll = () => {
+    setPrevData(null);
+    setNewData(null);
+    setIsAuditActive(false);
+    setUserStatus({});
+    setSelectedUpcs(new Set());
+    setSearchQuery('');
+  };
 
   // Handle resize for virtualization
   React.useEffect(() => {
@@ -542,8 +552,15 @@ export default function App() {
               Target: <strong className="ml-1 text-blue-300">{newData.length}</strong>
             </span>
           )}
-          {comparisonResults.length > 0 && (
+          {comparisonResults.length > 0 && isAuditActive && (
             <div className="flex items-center gap-2">
+              <button 
+                onClick={clearAll}
+                className="px-4 py-2 text-slate-400 hover:text-white transition-colors flex items-center gap-2 text-[10px] font-bold uppercase"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Reset All
+              </button>
+              <div className="w-px h-4 bg-slate-700 mx-2"></div>
               <div className="relative group">
                 <button className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-md font-bold transition-all flex items-center gap-2">
                   <Download className="w-3.5 h-3.5" /> Export Excel
@@ -655,99 +672,138 @@ export default function App() {
 
         {/* List Content */}
         <div className="flex-1 relative" id="audit-table-body">
-          {isProcessing && (
-            <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-[200] flex flex-col items-center justify-center">
-              <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-              <p className="mt-4 text-xs font-bold text-slate-600 uppercase tracking-widest animate-pulse">Processing Large Dataset...</p>
-            </div>
-          )}
-
-          {/* Bulk Action Bar */}
-          <AnimatePresence>
-            {selectedUpcs.size > 0 && (
-              <motion.div 
-                initial={{ y: 50, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 50, opacity: 0 }}
-                className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-[#0F172A] text-white px-6 py-3 rounded-2xl shadow-2xl z-[100] flex items-center gap-8 border border-white/10"
-              >
-                <div className="flex items-center gap-3 pr-8 border-r border-white/20 font-bold italic">
-                  <span className="text-blue-400 font-mono text-lg">{selectedUpcs.size}</span>
-                  <span className="text-xs uppercase tracking-widest text-slate-400">Rows Active</span>
+          {!isAuditActive ? (
+            <div className="h-full overflow-y-auto no-scrollbar bg-slate-50">
+              <div className="flex flex-col items-center justify-center p-20 min-h-full">
+                <div className="text-center mb-12">
+                  <h2 className="text-3xl font-bold tracking-tight text-slate-800">Ready for Audit</h2>
+                  <p className="text-slate-500 mt-2">Upload both datasets to begin cross-reference analysis</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <button 
-                    onClick={() => handleBulkAction('reviewed')}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
-                  >
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Reviewed
-                  </button>
-                  <button 
-                    onClick={() => handleBulkAction('ignored')}
-                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
-                  >
-                    <EyeOff className="w-3.5 h-3.5" /> Ignore
-                  </button>
-                  <button 
-                    onClick={() => handleBulkAction('pending')}
-                    className="px-4 py-2 text-red-400 hover:text-red-300 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> Reset
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
 
-          {!prevData && !newData ? (
-            <div className="h-full overflow-y-auto no-scrollbar">
-              <div className="flex flex-col items-center justify-center p-20">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
+                  {/* Baseline Column */}
                   <div className="relative group">
                     <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('prev')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                    <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
-                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
-                        <FileUp className="w-8 h-8" />
+                    <div className={cn(
+                      "h-64 rounded-3xl border-2 border-dashed flex flex-col items-center justify-center gap-4 transition-all shadow-sm",
+                      prevData ? "border-emerald-500 bg-emerald-50/20" : "border-slate-200 bg-white group-hover:border-blue-500/50 group-hover:bg-blue-50/10"
+                    )}>
+                      <div className={cn(
+                        "w-16 h-16 rounded-2xl flex items-center justify-center transition-colors",
+                        prevData ? "bg-emerald-100 text-emerald-600" : "bg-slate-50 text-slate-400 group-hover:text-blue-500"
+                      )}>
+                        {prevData ? <CheckCircle2 className="w-8 h-8" /> : <FileUp className="w-8 h-8" />}
                       </div>
-                      <div className="text-center">
-                        <p className="font-bold text-slate-700">Baseline Data (V1)</p>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload Previous Reference</p>
+                      <div className="text-center px-6">
+                        <p className={cn("font-bold", prevData ? "text-emerald-700" : "text-slate-700")}>
+                          {prevData ? "Baseline Verified" : "Baseline Data (V1)"}
+                        </p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">
+                          {prevData ? `${prevData.length.toLocaleString()} Records Active` : "Upload Previous Reference"}
+                        </p>
                       </div>
                     </div>
                   </div>
+
+                  {/* Scored Data Column */}
                   <div className="relative group">
                     <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('new')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                    <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
-                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
-                        <FileUp className="w-8 h-8" />
+                    <div className={cn(
+                      "h-64 rounded-3xl border-2 border-dashed flex flex-col items-center justify-center gap-4 transition-all shadow-sm",
+                      newData ? "border-blue-500 bg-blue-50/20" : "border-slate-200 bg-white group-hover:border-blue-500/50 group-hover:bg-blue-50/10"
+                    )}>
+                      <div className={cn(
+                        "w-16 h-16 rounded-2xl flex items-center justify-center transition-colors",
+                        newData ? "bg-blue-100 text-blue-600" : "bg-slate-50 text-slate-400 group-hover:text-blue-500"
+                      )}>
+                        {newData ? <CheckCircle2 className="w-8 h-8" /> : <FileUp className="w-8 h-8" />}
                       </div>
-                      <div className="text-center">
-                        <p className="font-bold text-slate-700">SCORED DATA</p>
-                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload New Scored Data</p>
+                      <div className="text-center px-6">
+                        <p className={cn("font-bold", newData ? "text-blue-700" : "text-slate-700")}>
+                          {newData ? "Scored Data Synced" : "SCORED DATA"}
+                        </p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">
+                          {newData ? `${newData.length.toLocaleString()} Records Cached` : "Upload New Scored Data"}
+                        </p>
                       </div>
                     </div>
                   </div>
                 </div>
-                <div className="mt-16 flex items-center gap-12 text-slate-400">
-                  <div className="flex flex-col items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-300">Phase 01</span>
-                    <span className="text-xs font-bold text-slate-400">Baseline Import</span>
-                  </div>
-                  <ArrowRight className="w-4 h-4 opacity-20" />
-                  <div className="flex flex-col items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-300">Phase 02</span>
-                    <span className="text-xs font-bold text-slate-400">New Scoring Feed</span>
-                  </div>
-                  <ArrowRight className="w-4 h-4 opacity-20" />
-                  <div className="flex flex-col items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-300">Phase 03</span>
-                    <span className="text-xs font-bold text-slate-400">Visual Verification</span>
-                  </div>
+
+                <div className="mt-12 flex flex-col items-center gap-6">
+                  {prevData && newData ? (
+                    <motion.button
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      onClick={() => setIsAuditActive(true)}
+                      className="px-12 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold text-lg shadow-xl shadow-blue-500/20 flex items-center gap-3 active:scale-95 transition-all"
+                    >
+                      <Columns className="w-6 h-6" />
+                      Sync & Start Audit
+                    </motion.button>
+                  ) : (
+                    <div className="flex items-center gap-12 text-slate-400">
+                      <div className={cn("flex flex-col items-center gap-2 opacity-50", prevData && "opacity-100 text-emerald-600")}>
+                        <span className="text-[10px] font-bold">TASK 01</span>
+                        <span className="text-xs font-bold uppercase italic">V1 Data</span>
+                      </div>
+                      <ArrowRight className="w-4 h-4 opacity-20" />
+                      <div className={cn("flex flex-col items-center gap-2 opacity-50", newData && "opacity-100 text-blue-600")}>
+                        <span className="text-[10px] font-bold">TASK 02</span>
+                        <span className="text-xs font-bold uppercase italic">Scored Data</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           ) : (
             <div className="h-full">
+              {isProcessing && (
+                <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-[200] flex flex-col items-center justify-center">
+                  <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                  <p className="mt-4 text-xs font-bold text-slate-600 uppercase tracking-widest animate-pulse">Processing Large Dataset...</p>
+                </div>
+              )}
+
+              {/* Bulk Action Bar */}
+              <AnimatePresence>
+                {selectedUpcs.size > 0 && (
+                  <motion.div 
+                    initial={{ y: 50, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: 50, opacity: 0 }}
+                    className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-[#0F172A] text-white px-6 py-3 rounded-2xl shadow-2xl z-[100] flex items-center gap-8 border border-white/10"
+                  >
+                    <div className="flex items-center gap-3 pr-8 border-r border-white/20 font-bold italic">
+                      <span className="text-blue-400 font-mono text-lg">{selectedUpcs.size}</span>
+                      <span className="text-xs uppercase tracking-widest text-slate-400">Rows Active</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button 
+                        onClick={() => handleBulkAction('reviewed')}
+                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Reviewed
+                      </button>
+                      <button 
+                        onClick={() => handleBulkAction('ignored')}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                      >
+                        <EyeOff className="w-3.5 h-3.5" /> Ignore
+                      </button>
+                      <button 
+                        onClick={() => handleBulkAction('pending')}
+                        className="px-4 py-2 text-red-400 hover:text-red-300 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Reset
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              <div className="h-full">
               {filteredResults.length > 0 ? (
                 <div className="h-full">
                   {/* Virtualized List */}
@@ -777,9 +833,10 @@ export default function App() {
                 </motion.div>
               )}
             </div>
-          )}
-        </div>
-      </main>
+          </div>
+        )}
+      </div>
+    </main>
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 px-6 py-2.5 flex justify-between items-center text-[10px] text-slate-500 shrink-0 font-bold uppercase tracking-wider relative z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
