@@ -265,6 +265,16 @@ export default function App() {
   const [prevData, setPrevData] = useState<ImageItem[] | null>(null);
   const [newData, setNewData] = useState<ImageItem[] | null>(null);
   const [resultsFromWorker, setResultsFromWorker] = useState<ComparisonResult[]>([]);
+  const [workerStats, setWorkerStats] = useState({ 
+    total: 0,
+    changed: 0,
+    same: 0,
+    reviewed: 0,
+    ignored: 0,
+    totalPrev: 0, 
+    totalNew: 0, 
+    totalMerged: 0 
+  });
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState('');
   const [isAuditActive, setIsAuditActive] = useState(false);
@@ -336,7 +346,7 @@ export default function App() {
           const wb = XLSX.read(data, { type: 'array', cellDates: true, cellNF: false, cellText: false });
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
-          const jsonData = XLSX.utils.sheet_to_json(ws) as ImageItem[];
+          const jsonData = XLSX.utils.sheet_to_json(ws, { defval: "" }) as ImageItem[];
           
           if (type === 'prev') setPrevData(jsonData);
           else setNewData(jsonData);
@@ -375,7 +385,9 @@ export default function App() {
   React.useEffect(() => {
     workerRef.current = new Worker(new URL('./comparisonWorker.js', import.meta.url));
     workerRef.current.onmessage = (e) => {
-      setResultsFromWorker(e.data);
+      const { results, stats } = e.data;
+      setResultsFromWorker(results);
+      setWorkerStats(stats);
       setIsProcessing(false);
       setIsAuditActive(true);
       setProcessingProgress('');
@@ -386,81 +398,25 @@ export default function App() {
   React.useEffect(() => {
     if (prevData && newData) {
       setIsProcessing(true);
-      setProcessingProgress('Analyzing 50k+ records...');
-      workerRef.current?.postMessage({ prevData, newData });
+      setProcessingProgress(debouncedSearch ? `Searching "${debouncedSearch}"...` : 'Analyzing records...');
+      workerRef.current?.postMessage({ 
+        prevData, 
+        newData, 
+        config: {
+          filter,
+          searchQuery: debouncedSearch,
+          sortConfig,
+          userStatus
+        }
+      });
     }
-  }, [prevData, newData]);
+  }, [prevData, newData, filter, debouncedSearch, sortConfig, userStatus]);
 
-  const comparisonResults = useMemo(() => {
-    if (resultsFromWorker.length === 0) return [];
-    return resultsFromWorker.map(res => ({
-      ...res,
-      auditStatus: userStatus[res.upc] || 'pending'
-    }));
-  }, [resultsFromWorker, userStatus]);
-
-  const filteredResults = useMemo(() => {
-    let results = [...comparisonResults];
-    
-    // Search
-    if (debouncedSearch) {
-      results = results.filter(r => r.upc.includes(debouncedSearch));
-    }
-
-    // Filter
-    if (filter === 'changed') {
-      results = results.filter(r => r.hasChanged);
-    } else if (filter === 'reviewed') {
-      results = results.filter(r => r.auditStatus === 'reviewed');
-    } else if (filter === 'ignored') {
-      results = results.filter(r => r.auditStatus === 'ignored');
-    }
-
-    // Sort
-    results.sort((a, b) => {
-      let valA: any = '';
-      let valB: any = '';
-
-      switch (sortConfig.key) {
-        case 'upc':
-          valA = a.upc;
-          valB = b.upc;
-          break;
-        case 'prev_name':
-          valA = a.previous?.CSOR_IMAGE_NAME || '';
-          valB = b.previous?.CSOR_IMAGE_NAME || '';
-          break;
-        case 'curr_name':
-          valA = a.current?.CSOR_IMAGE_NAME || '';
-          valB = b.current?.CSOR_IMAGE_NAME || '';
-          break;
-        case 'auditStatus':
-          valA = a.auditStatus;
-          valB = b.auditStatus;
-          break;
-        case 'status':
-          valA = a.hasChanged ? 'B' : 'A';
-          valB = b.hasChanged ? 'B' : 'A';
-          break;
-      }
-
-      if (valA < valB) return sortConfig.order === 'asc' ? -1 : 1;
-      if (valA > valB) return sortConfig.order === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    return results;
-  }, [comparisonResults, filter, searchQuery, sortConfig]);
+  const filteredResults = resultsFromWorker;
 
   const stats = useMemo(() => {
-    return {
-      total: comparisonResults.length,
-      changed: comparisonResults.filter(r => r.hasChanged).length,
-      same: comparisonResults.filter(r => !r.hasChanged).length,
-      reviewed: comparisonResults.filter(r => r.auditStatus === 'reviewed').length,
-      ignored: comparisonResults.filter(r => r.auditStatus === 'ignored').length
-    };
-  }, [comparisonResults]);
+    return workerStats;
+  }, [workerStats]);
 
   const handleSelect = (upc: string) => {
     setSelectedUpcs(prev => {
@@ -496,7 +452,7 @@ export default function App() {
         ? (r: ComparisonResult) => selectedUpcs.has(r.upc)
         : () => true;
 
-    const dataToExport = comparisonResults.filter(filterFn).map(r => ({
+    const dataToExport = resultsFromWorker.filter(filterFn).map(r => ({
       UPC: r.upc,
       Audit_Status: r.auditStatus.toUpperCase(),
       Change_Status: r.hasChanged ? 'Changed' : 'Same',
@@ -627,15 +583,20 @@ export default function App() {
         <div className="flex items-center gap-4 text-xs">
           {prevData && (
             <span className="px-3 py-1.5 bg-slate-700/50 rounded-full border border-slate-600/50">
-              Baseline: <strong className="ml-1 text-slate-100">{prevData.length}</strong>
+              Baseline: <strong className="ml-1 text-slate-100">{workerStats.totalPrev || prevData.length}</strong>
             </span>
           )}
           {newData && (
             <span className="px-3 py-1.5 bg-slate-700/50 rounded-full border border-slate-600/50">
-              Target: <strong className="ml-1 text-blue-300">{newData.length}</strong>
+              Target: <strong className="ml-1 text-blue-300">{workerStats.totalNew || newData.length}</strong>
             </span>
           )}
-          {comparisonResults.length > 0 && isAuditActive && (
+          {isAuditActive && (
+            <span className="px-3 py-1.5 bg-blue-500/20 rounded-full border border-blue-500/30 text-blue-300">
+              Unique Merged: <strong className="ml-1 text-white">{workerStats.totalMerged}</strong>
+            </span>
+          )}
+          {resultsFromWorker.length > 0 && isAuditActive && (
             <div className="flex items-center gap-2">
               <button 
                 onClick={clearAll}
@@ -919,14 +880,14 @@ export default function App() {
                   <div className="h-full">
                     {/* Virtualized List */}
                     <List
-                      height={listHeight} 
+                      style={{ height: listHeight, width: '100%' }} 
                       rowCount={filteredResults.length}
                       rowHeight={rowHeights[rowDensity]} 
                       className="scrollbar-custom"
-                      width="100%"
                       rowProps={{}}
                       rowComponent={({ index, style }: any) => (
                         <ComparisonRow 
+                          key={filteredResults[index].upc}
                           result={filteredResults[index]} 
                           onPreview={(res) => setPreviewItem(res)}
                           isSelected={selectedUpcs.has(filteredResults[index].upc)}
@@ -956,7 +917,7 @@ export default function App() {
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> System Verified
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div> Showing {filteredResults.length} / {comparisonResults.length}
+            <div className="w-1.5 h-1.5 rounded-full bg-blue-500"></div> Showing {filteredResults.length} / {workerStats.totalMerged || resultsFromWorker.length}
           </div>
         </div>
         <div className="flex items-center gap-4">
