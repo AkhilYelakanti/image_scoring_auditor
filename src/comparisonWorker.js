@@ -71,9 +71,8 @@ self.onmessage = (e) => {
   const parseImageName = (name) => {
     if (!name) return { version: '', type: '' };
     // Handle multiple extensions like .jpg.jpg or .JPG
-    const parts = String(name).split('.');
-    const clean = parts[0]; 
-    const segments = clean.split('_');
+    const filenameNoExt = String(name).split('.')[0]; 
+    const segments = filenameNoExt.split('_');
     
     // Pattern usually: UPC_VERSION_TYPE
     if (segments.length >= 3) {
@@ -96,6 +95,9 @@ self.onmessage = (e) => {
         const foundUrl = getImageUrl(d);
         if (foundUrl) d.SOURCE_IMAGE_URL = foundUrl;
         d.CSOR_IMAGE_NAME = d.CSOR_IMAGE_NAME || d.IMAGE_NAME || d.FILENAME || '';
+        const parts = parseImageName(d.CSOR_IMAGE_NAME);
+        d._extractedType = parts.type;
+        d._extractedVersion = parts.version;
         prevMap.set(u, d);
       }
     });
@@ -109,6 +111,9 @@ self.onmessage = (e) => {
         const foundUrl = getImageUrl(d);
         if (foundUrl) d.SOURCE_IMAGE_URL = foundUrl;
         d.CSOR_IMAGE_NAME = d.CSOR_IMAGE_NAME || d.IMAGE_NAME || d.FILENAME || '';
+        const parts = parseImageName(d.CSOR_IMAGE_NAME);
+        d._extractedType = parts.type;
+        d._extractedVersion = parts.version;
         newMap.set(u, d);
       }
     });
@@ -125,18 +130,13 @@ self.onmessage = (e) => {
     
     const changes = [];
     if (prev && current) {
-      const pParts = parseImageName(prev.CSOR_IMAGE_NAME);
-      const cParts = parseImageName(current.CSOR_IMAGE_NAME);
-
-      if (pParts.type !== cParts.type) changes.push('TYPE');
-      if (pParts.version !== cParts.version) changes.push('VERSION');
+      if (prev._extractedType !== current._extractedType) changes.push('TYPE');
+      if (prev._extractedVersion !== current._extractedVersion) changes.push('VERSION');
       
-      // We are no longer tracking URL or general IMAGE_NAME changes per request
       if (String(prev.IMAGE_STATUS || '').trim() !== String(current.IMAGE_STATUS || '').trim()) {
         changes.push('STATUS');
       }
     }
-    // CREATED and DELETED logic removed - these rows will now show as "Matched" since they have no changes in the tracked fields
 
     const auditStatus = userStatus[upc] || 'pending';
 
@@ -146,11 +146,36 @@ self.onmessage = (e) => {
       current: current,
       hasChanged: changes.length > 0,
       changes,
-      auditStatus
+      auditStatus,
+      prevType: prev?._extractedType || '',
+      currType: current?._extractedType || '',
+      prevVersion: prev?._extractedVersion || '',
+      currVersion: current?._extractedVersion || ''
     };
   });
 
-  // Calculate full stats before filtering
+  // Calculate stats BEFORE filtering
+  const typeDistribution = {};
+  const versionChangeDistribution = {};
+  const typeChangeDistribution = {};
+  
+  results.forEach(r => {
+    // Grouping by type
+    const type = r.currType || r.prevType || 'Unknown';
+    typeDistribution[type] = (typeDistribution[type] || 0) + 1;
+    
+    if (r.hasChanged) {
+      if (r.changes.includes('VERSION')) {
+        const vKey = `${r.prevVersion} -> ${r.currVersion}`;
+        versionChangeDistribution[vKey] = (versionChangeDistribution[vKey] || 0) + 1;
+      }
+      if (r.changes.includes('TYPE')) {
+        const tKey = `${r.prevType || 'Empty'} -> ${r.currType || 'Empty'}`;
+        typeChangeDistribution[tKey] = (typeChangeDistribution[tKey] || 0) + 1;
+      }
+    }
+  });
+
   const stats = {
     total: results.length,
     changed: results.filter(r => r.hasChanged).length,
@@ -160,7 +185,12 @@ self.onmessage = (e) => {
     ignoredNoImages: 0,
     totalPrev: prevMap.size,
     totalNew: newMap.size,
-    totalMerged: results.length
+    totalMerged: results.length,
+    // Detailed stats
+    typeDistribution,
+    versionChangeDistribution,
+    typeChangeDistribution,
+    upcCount: Array.from(allUpcs).length
   };
 
   // Filter out results where BOTH versions have no image
@@ -179,8 +209,15 @@ self.onmessage = (e) => {
     results = results.filter(r => 
       r.upc.toLowerCase().includes(q) || 
       (r.current?.CSOR_IMAGE_NAME || '').toLowerCase().includes(q) ||
-      (r.previous?.CSOR_IMAGE_NAME || '').toLowerCase().includes(q)
+      (r.previous?.CSOR_IMAGE_NAME || '').toLowerCase().includes(q) ||
+      r.currType.toLowerCase().includes(q) ||
+      r.prevType.toLowerCase().includes(q)
     );
+  }
+
+  const { typeFilter } = config || {};
+  if (typeFilter && typeFilter !== 'all') {
+    results = results.filter(r => r.currType === typeFilter || r.prevType === typeFilter);
   }
 
   if (filter !== 'all') {

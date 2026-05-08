@@ -91,6 +91,10 @@ interface ComparisonResult {
   hasChanged: boolean;
   changes: string[];
   auditStatus: 'pending' | 'reviewed' | 'ignored';
+  prevType: string;
+  currType: string;
+  prevVersion: string;
+  currVersion: string;
 }
 
 type FilterStatus = 'all' | 'changed' | 'reviewed' | 'ignored';
@@ -125,7 +129,7 @@ const ComparisonRow = React.memo(({
         height: style?.height || 'auto'
       }}
       className={cn(
-        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden relative",
+        "grid grid-cols-[48px_160px_1fr_1fr_70px_70px_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden relative",
         isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/10" : "hover:bg-slate-50/50"
       )}
       id={`row-${result.upc}`}
@@ -252,6 +256,19 @@ const ComparisonRow = React.memo(({
       </div>
 
       {/* Status */}
+      <div className="px-3 py-4 flex flex-col justify-center border-r border-slate-100 min-w-[70px]">
+        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V1 Type</span>
+        <span className="text-[10px] font-mono text-slate-600 font-bold">{result.prevType || '---'}</span>
+      </div>
+
+      <div className="px-3 py-4 flex flex-col justify-center border-r border-slate-100 min-w-[70px]">
+        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V2 Type</span>
+        <span className={cn(
+          "text-[10px] font-mono font-bold",
+          result.changes.includes('TYPE') ? "text-amber-600" : "text-slate-600"
+        )}>{result.currType || '---'}</span>
+      </div>
+
       <div className="px-4 py-4 flex flex-col items-center justify-center min-w-[100px]">
         {isChanged ? (
           <div className="flex flex-col items-center gap-1.5">
@@ -291,12 +308,19 @@ export default function App() {
     ignoredNoImages: 0,
     totalPrev: 0, 
     totalNew: 0, 
-    totalMerged: 0 
+    totalMerged: 0,
+    typeDistribution: {} as Record<string, number>,
+    versionChangeDistribution: {} as Record<string, number>,
+    typeChangeDistribution: {} as Record<string, number>,
+    upcCount: 0
   });
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingProgress, setProcessingProgress] = useState('');
+  const [exportProgress, setExportProgress] = useState(0);
   const [isAuditActive, setIsAuditActive] = useState(false);
   const [filter, setFilter] = useState<FilterStatus>('changed');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; order: SortOrder }>({ key: 'upc', order: 'asc' });
   const [previewItem, setPreviewItem] = useState<ComparisonResult | null>(null);
@@ -422,6 +446,7 @@ export default function App() {
         newData, 
         config: {
           filter,
+          typeFilter,
           searchQuery: debouncedSearch,
           sortConfig,
           userStatus
@@ -475,6 +500,10 @@ export default function App() {
       Audit_Status: r.auditStatus.toUpperCase(),
       Change_Status: r.hasChanged ? 'Changed' : 'Same',
       Change_Types: r.changes.join(', '),
+      Baseline_Type: r.prevType || '---',
+      Scored_Type: r.currType || '---',
+      Baseline_Version: r.prevVersion || '---',
+      Scored_Version: r.currVersion || '---',
       Baseline_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
       Scored_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
       Baseline_URL: r.previous?.SOURCE_IMAGE_URL || '---',
@@ -504,9 +533,11 @@ export default function App() {
 
   const exportPDF = async () => {
     setIsProcessing(true);
+    setExportProgress(0);
     try {
       const doc = new jsPDF('p', 'mm', 'a4');
       const resultsToExport = filteredResults;
+      const total = resultsToExport.length;
       
       const primaryColor = [15, 23, 42];
       doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
@@ -520,18 +551,27 @@ export default function App() {
       doc.setFontSize(10);
       doc.setFont("helvetica", "normal");
       doc.text(`Generated: ${new Date().toLocaleString()}`, 15, 30);
-      doc.text(`View: ${filter.toUpperCase()} | Total Records: ${resultsToExport.length}`, 195, 30, { align: 'right' });
+      doc.text(`View: ${filter.toUpperCase()} | Total Records: ${total}`, 195, 30, { align: 'right' });
       
       let y = 50;
+      let count = 0;
       
       for (const item of resultsToExport) {
+        count++;
+        if (count % 5 === 0 || count === total) {
+          setExportProgress(Math.round((count / total) * 100));
+          setProcessingProgress(`Generating PDF: ${count} / ${total} records...`);
+          // Allow UI to breathe
+          await new Promise(r => setTimeout(r, 0));
+        }
+
         if (y > 220) {
           doc.addPage();
           y = 20;
         }
 
         doc.setFillColor(248, 250, 252);
-        doc.rect(15, y, 180, 55, 'F'); // Increased height for image area
+        doc.rect(15, y, 180, 55, 'F'); 
         doc.setDrawColor(226, 232, 240);
         doc.rect(15, y, 180, 55, 'S');
 
@@ -549,8 +589,8 @@ export default function App() {
         }
 
         // Images in PDF
-        const prevImg = await getBase64Image(formatImageUrl(item.previous?.SOURCE_IMAGE_URL));
-        const currImg = await getBase64Image(formatImageUrl(item.current?.SOURCE_IMAGE_URL));
+        const prevImg = item.previous?.SOURCE_IMAGE_URL ? await getBase64Image(formatImageUrl(item.previous.SOURCE_IMAGE_URL)) : null;
+        const currImg = item.current?.SOURCE_IMAGE_URL ? await getBase64Image(formatImageUrl(item.current.SOURCE_IMAGE_URL)) : null;
 
         if (prevImg) {
           try { doc.addImage(prevImg, 'JPEG', 20, y + 25, 25, 25); } catch(e) {}
@@ -579,9 +619,67 @@ export default function App() {
         y += 62;
       }
       
+      setProcessingProgress('Saving PDF file...');
       doc.save(`Audit_Export_${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
       console.error('PDF Export failed:', err);
+      alert('PDF generation failed. This usually happens with extremely large datasets (50k+ records) due to browser memory limits. Please try filtering your results first or use Excel export.');
+    } finally {
+      setIsProcessing(false);
+      setExportProgress(0);
+      setProcessingProgress('');
+    }
+  };
+
+  const exportSummaryPDF = async () => {
+    setIsProcessing(true);
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const primaryColor = [15, 23, 42];
+      
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(0, 0, 210, 40, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(22);
+      doc.text('AUDIT SUMMARY REPORT', 15, 20);
+      doc.setFontSize(10);
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 15, 30);
+
+      let y = 60;
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(14);
+      doc.text('Overview Statistics', 15, y);
+      y += 10;
+      doc.setFontSize(10);
+      doc.text(`Total Distinct UPCs: ${workerStats.upcCount}`, 20, y); y += 6;
+      doc.text(`Total Records Merged: ${workerStats.totalMerged}`, 20, y); y += 6;
+      doc.text(`Identical Records: ${workerStats.same}`, 20, y); y += 6;
+      doc.text(`Updated Records: ${workerStats.changed}`, 20, y); y += 12;
+
+      doc.setFontSize(14);
+      doc.text('Image Distribution by Type', 15, y);
+      y += 10;
+      doc.setFontSize(9);
+      Object.entries(workerStats.typeDistribution).forEach(([type, count]) => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(`${type || 'None'}: ${count}`, 20, y);
+        y += 5;
+      });
+      y += 10;
+
+      doc.setFontSize(14);
+      doc.text('Version Transitions', 15, y);
+      y += 10;
+      doc.setFontSize(9);
+      Object.entries(workerStats.versionChangeDistribution).forEach(([v, count]) => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.text(`${v}: ${count} records`, 20, y);
+        y += 5;
+      });
+
+      doc.save(`Audit_Summary_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error(err);
     } finally {
       setIsProcessing(false);
     }
@@ -589,6 +687,111 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-[#F8FAFC] text-slate-900 font-sans overflow-hidden">
+      {/* Summary Modal */}
+      <AnimatePresence>
+        {isSummaryOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[500] flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col border border-white/20"
+            >
+              <div className="bg-slate-900 p-8 text-white flex justify-between items-center">
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight">Audit Insights Summary</h2>
+                  <p className="text-slate-400 text-sm mt-1">Cross-referenced dataset analysis</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={exportSummaryPDF}
+                    className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2"
+                  >
+                    <Download className="w-4 h-4" /> Download PDF
+                  </button>
+                  <button 
+                    onClick={() => setIsSummaryOpen(false)}
+                    className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center hover:bg-slate-700 transition-colors"
+                  >
+                    <RefreshCw className="w-5 h-5 rotate-45" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-12 custom-scrollbar">
+                <div className="grid grid-cols-4 gap-6 mb-12">
+                  {[
+                    { label: 'Distinct UPCs', value: workerStats.upcCount, color: 'blue' },
+                    { label: 'Matched', value: workerStats.same, color: 'emerald' },
+                    { label: 'Updated', value: workerStats.changed, color: 'amber' },
+                    { label: 'Ignored (No Img)', value: workerStats.ignoredNoImages, color: 'rose' },
+                  ].map(stat => (
+                    <div key={stat.label} className={cn("p-6 rounded-3xl border", `bg-${stat.color}-50 border-${stat.color}-100`)}>
+                      <p className={cn("text-[10px] font-bold uppercase tracking-widest mb-1", `text-${stat.color}-600`)}>{stat.label}</p>
+                      <p className="text-3xl font-black text-slate-900 font-mono tracking-tighter">{stat.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-2 gap-12">
+                  <section>
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                      <Layout className="w-4 h-4" /> Type Distribution
+                    </h3>
+                    <div className="space-y-3">
+                      {Object.entries(workerStats.typeDistribution || {}).sort((a,b) => b[1] - a[1]).map(([type, count]) => (
+                        <div key={type} className="flex items-center justify-between group">
+                          <span className="text-sm font-bold text-slate-600 font-mono italic">{type || 'None'}</span>
+                          <div className="flex items-center gap-4 flex-1 ml-6">
+                            <div className="h-1.5 bg-slate-100 rounded-full flex-1 overflow-hidden">
+                              <motion.div 
+                                initial={{ width: 0 }}
+                                animate={{ width: `${(count / workerStats.totalMerged) * 100}%` }}
+                                className="h-full bg-blue-500 rounded-full"
+                              />
+                            </div>
+                            <span className="text-xs font-black text-slate-900 w-8 text-right">{count}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section>
+                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4" /> Change Insights
+                    </h3>
+                    <div className="space-y-6">
+                       <div>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">Version Transitions</p>
+                         <div className="flex flex-wrap gap-2">
+                           {Object.entries(workerStats.versionChangeDistribution || {}).map(([v, count]) => (
+                             <div key={v} className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl flex flex-col">
+                               <span className="text-[8px] text-slate-400 font-bold">{v}</span>
+                               <span className="text-sm font-bold text-blue-600">{count}</span>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                       <div>
+                         <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">Type Transitions</p>
+                         <div className="flex flex-wrap gap-2">
+                           {Object.entries(workerStats.typeChangeDistribution || {}).map(([t, count]) => (
+                             <div key={t} className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl flex flex-col">
+                               <span className="text-[8px] text-slate-400 font-bold">{t}</span>
+                               <span className="text-sm font-bold text-amber-600">{count}</span>
+                             </div>
+                           ))}
+                         </div>
+                       </div>
+                    </div>
+                  </section>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
       {/* Header */}
       <header className="bg-[#0F172A] text-white px-6 py-4 flex justify-between items-center shrink-0 shadow-lg relative z-50">
         <div className="flex items-center gap-3">
@@ -621,6 +824,13 @@ export default function App() {
           )}
           {resultsFromWorker.length > 0 && isAuditActive && (
             <div className="flex items-center gap-2">
+              <button 
+                onClick={() => setIsSummaryOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-md font-bold transition-all flex items-center gap-2 shadow-sm text-white"
+              >
+                <Layout className="w-3.5 h-3.5" /> Overall Summary
+              </button>
+              <div className="w-px h-4 bg-slate-700 mx-2"></div>
               <button 
                 onClick={clearAll}
                 className="px-4 py-2 text-slate-400 hover:text-white transition-colors flex items-center gap-2 text-[10px] font-bold uppercase"
@@ -702,6 +912,19 @@ export default function App() {
             <span>Audit Delta: <span className="text-blue-600 font-mono text-[12px]">{( (stats.changed / (stats.total || 1)) * 100).toFixed(1)}%</span></span>
           </div>
           <div className="relative">
+            <select 
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/50 transition-all font-bold text-slate-600 appearance-none cursor-pointer"
+            >
+              <option value="all">All Types</option>
+              {Object.keys(workerStats.typeDistribution || {}).sort().map(type => (
+                <option key={type} value={type}>{type || 'None'}</option>
+              ))}
+            </select>
+            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-3 top-3 pointer-events-none" />
+          </div>
+          <div className="relative">
             <input 
               type="text" 
               placeholder="Quick UPC find..." 
@@ -716,7 +939,7 @@ export default function App() {
 
       <main className="flex-1 flex flex-col min-h-0 bg-white relative">
         {/* Table Header */}
-        <div className="grid grid-cols-[48px_160px_1fr_1fr_120px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
+        <div className="grid grid-cols-[48px_160px_1fr_1fr_70px_70px_120px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
           <div className="flex items-center justify-center border-r border-slate-200">
             <button 
               onClick={() => {
@@ -755,6 +978,8 @@ export default function App() {
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
+          <div className="px-3 py-3 border-l border-slate-200 text-center">T1</div>
+          <div className="px-3 py-3 border-l border-slate-200 text-center">T2</div>
         </div>
 
         {/* List Content */}
@@ -1051,15 +1276,41 @@ export default function App() {
 
       {/* Processing Loader */}
       {isProcessing && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[300] flex items-center justify-center">
-          <div className="bg-white p-10 rounded-[32px] shadow-2xl flex flex-col items-center gap-6 border border-slate-100">
-            <div className="relative">
-              <div className="w-16 h-16 border-4 border-blue-100 rounded-full"></div>
-              <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin absolute inset-0"></div>
+        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[300] flex items-center justify-center p-6">
+          <div className="bg-slate-800 rounded-2xl p-8 border border-slate-700 shadow-2xl max-w-sm w-full text-center space-y-6">
+            <div className="relative w-24 h-24 mx-auto">
+              <div className="absolute inset-0 flex items-center justify-center text-blue-400 font-mono font-bold text-xl">
+                {exportProgress > 0 ? `${exportProgress}%` : <RefreshCw className="w-8 h-8 animate-spin opacity-40" />}
+              </div>
+              <svg className="absolute inset-0 w-full h-full -rotate-90">
+                <circle 
+                  cx="48" cy="48" r="44" 
+                  className="stroke-slate-700 fill-none" 
+                  strokeWidth="4" 
+                />
+                <circle 
+                  cx="48" cy="48" r="44" 
+                  className="stroke-blue-500 fill-none transition-all duration-300" 
+                  strokeWidth="4" 
+                  strokeDasharray={276}
+                  strokeDashoffset={276 - (276 * (exportProgress || 0)) / 100}
+                />
+              </svg>
             </div>
-            <div className="text-center">
-              <p className="font-bold text-slate-800 text-lg tracking-tight">Syncing Repositories</p>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Analyzing cross-referenced data</p>
+            <div className="space-y-2">
+              <h3 className="text-white font-bold text-lg uppercase tracking-widest leading-tight">
+                {exportProgress > 0 ? 'EXPORTING DATA' : 'PROCESSING DATASET'}
+              </h3>
+              <div className="flex flex-col gap-1">
+                <p className="text-slate-400 text-sm font-medium">
+                  {processingProgress || 'Analyzing cross-referenced data. Please wait.'}
+                </p>
+                {exportProgress > 0 && (
+                   <p className="text-[10px] text-slate-500 font-bold uppercase tracking-tighter">
+                     Fetching assets & generating pages...
+                   </p>
+                )}
+              </div>
             </div>
           </div>
         </div>
