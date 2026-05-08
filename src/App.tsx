@@ -50,8 +50,14 @@ function cn(...inputs: ClassValue[]) {
 function formatImageUrl(url: string | undefined): string {
   if (!url) return 'https://placehold.co/400?text=No+URL';
   
-  // Force HTTPS for Cloudinary and other providers that support it
   let sanitized = String(url).trim();
+  
+  // Handle protocol-relative URLs
+  if (sanitized.startsWith('//')) {
+    sanitized = 'https:' + sanitized;
+  }
+  
+  // Force HTTPS for common providers
   if (sanitized.startsWith('http://')) {
     sanitized = sanitized.replace('http://', 'https://');
   }
@@ -246,13 +252,24 @@ const ComparisonRow = React.memo(({
       </div>
 
       {/* Status */}
-      <div className="px-4 py-4 flex flex-col items-center justify-center">
+      <div className="px-4 py-4 flex flex-col items-center justify-center min-w-[100px]">
         {isChanged ? (
-          <div className="px-2 py-1 bg-blue-100 text-blue-700 text-[9px] font-bold rounded border border-blue-200 uppercase tracking-tight shadow-sm">
-            Updated
+          <div className="flex flex-col items-center gap-1.5">
+            <div className="px-2 py-1 bg-amber-100 text-amber-700 text-[9px] font-bold rounded border border-amber-200 uppercase tracking-tight shadow-sm flex items-center gap-1">
+              <RefreshCw className="w-2.5 h-2.5" />
+              Updated
+            </div>
+            <div className="flex flex-wrap gap-1 justify-center max-w-[90px]">
+              {result.changes.map(change => (
+                <span key={change} className="px-1.5 py-0.5 bg-blue-50 text-blue-600 text-[7px] font-extrabold rounded border border-blue-100 uppercase tracking-tighter">
+                  {change}
+                </span>
+              ))}
+            </div>
           </div>
         ) : (
-          <div className="px-2 py-1 bg-slate-50 text-slate-400 text-[9px] font-bold rounded border border-slate-200 uppercase tracking-tight">
+          <div className="px-2 py-1 bg-emerald-50 text-emerald-600 text-[9px] font-bold rounded border border-emerald-200 uppercase tracking-tight flex items-center gap-1">
+            <CheckCircle2 className="w-2.5 h-2.5" />
             Matched
           </div>
         )}

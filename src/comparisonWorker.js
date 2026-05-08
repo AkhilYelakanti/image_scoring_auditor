@@ -10,8 +10,8 @@ self.onmessage = (e) => {
     if (!item) return '';
     const keys = Object.keys(item);
     // Prioritize exact matches or common names
-    const exactMatch = keys.find(k => ['UPC', 'GTIN', 'EAN', 'ID', 'IDENTIFIER'].includes(k.toUpperCase()));
-    if (exactMatch) return String(item[exactMatch]).trim();
+    const exactMatch = keys.find(k => ['UPC', 'GTIN', 'EAN', 'ID', 'IDENTIFIER', 'UPC / IDENTIFIER'].includes(k.toUpperCase()));
+    if (exactMatch && item[exactMatch]) return String(item[exactMatch]).trim();
 
     const upcKey = keys.find(k => {
       const lower = k.toLowerCase();
@@ -31,21 +31,61 @@ self.onmessage = (e) => {
     if (!item) return '';
     const keys = Object.keys(item);
     
-    // 1. Look for known image/url keys that have a value
-    const urlKey = keys.find(k => {
-      const lower = k.toLowerCase();
-      const val = String(item[k] || '').trim();
-      return val.length > 0 && 
-             (lower.includes('url') || lower.includes('image') || lower.includes('link') || lower.includes('http') || lower.includes('path')) && 
-             !lower.includes('name') && !lower.includes('type');
-    });
-    if (urlKey) return String(item[urlKey]).trim();
+    // 1. Look for known image fields first
+    const knownKeys = ['SOURCE_IMAGE_URL', 'IMAGE_URL', 'URL', 'IMAGE', 'SOURCE_URL'];
+    for (const key of knownKeys) {
+      const found = keys.find(k => k.toUpperCase() === key);
+      if (found && String(item[found]).trim().startsWith('http')) {
+        return String(item[found]).trim();
+      }
+    }
 
-    // 2. Look for any key whose value starts with http
-    const httpKey = keys.find(k => String(item[k] || '').trim().toLowerCase().startsWith('http'));
+    // 2. Look for any value starting with http
+    const httpKey = keys.find(k => {
+      const val = String(item[k] || '').trim().toLowerCase();
+      return val.startsWith('http');
+    });
     if (httpKey) return String(item[httpKey]).trim();
 
-    return String(item.SOURCE_IMAGE_URL || item.IMAGE_URL || '').trim();
+    // 3. Look for anything with common image extensions or hosting keywords
+    const imageKey = keys.find(k => {
+      const val = String(item[k] || '').trim().toLowerCase();
+      return val.length > 0 && 
+             (val.includes('cloudinary') || val.includes('amazonaws') || val.endsWith('.jpg') || val.endsWith('.png') || val.endsWith('.jpeg')) &&
+             !k.toLowerCase().includes('name') && !k.toLowerCase().includes('title');
+    });
+    if (imageKey) return String(item[imageKey]).trim();
+
+    // Fallback to any URL segment
+    const fallbackKey = keys.find(k => {
+      const lower = k.toLowerCase();
+      return (lower.includes('url') || lower.includes('link') || lower.includes('path')) && 
+             !lower.includes('name') && !lower.includes('title');
+    });
+    if (fallbackKey) return String(item[fallbackKey]).trim();
+
+    return '';
+  };
+
+  // Helper to extract Type and Version from image name
+  const parseImageName = (name) => {
+    if (!name) return { version: '', type: '' };
+    // Handle multiple extensions like .jpg.jpg or .JPG
+    const parts = String(name).split('.');
+    const clean = parts[0]; 
+    const segments = clean.split('_');
+    
+    // Pattern usually: UPC_VERSION_TYPE
+    if (segments.length >= 3) {
+      return {
+        version: segments[segments.length - 2],
+        type: segments[segments.length - 1]
+      };
+    }
+    if (segments.length === 2) {
+      return { version: segments[1], type: '' };
+    }
+    return { version: '', type: '' };
   };
 
   const prevMap = new Map();
@@ -55,6 +95,7 @@ self.onmessage = (e) => {
       if (u) {
         const foundUrl = getImageUrl(d);
         if (foundUrl) d.SOURCE_IMAGE_URL = foundUrl;
+        d.CSOR_IMAGE_NAME = d.CSOR_IMAGE_NAME || d.IMAGE_NAME || d.FILENAME || '';
         prevMap.set(u, d);
       }
     });
@@ -67,6 +108,7 @@ self.onmessage = (e) => {
       if (u) {
         const foundUrl = getImageUrl(d);
         if (foundUrl) d.SOURCE_IMAGE_URL = foundUrl;
+        d.CSOR_IMAGE_NAME = d.CSOR_IMAGE_NAME || d.IMAGE_NAME || d.FILENAME || '';
         newMap.set(u, d);
       }
     });
@@ -83,14 +125,24 @@ self.onmessage = (e) => {
     
     const changes = [];
     if (prev && current) {
-      const pName = String(prev.CSOR_IMAGE_NAME || '').trim();
-      const cName = String(current.CSOR_IMAGE_NAME || '').trim();
       const pUrl = String(prev.SOURCE_IMAGE_URL || '').trim();
       const cUrl = String(current.SOURCE_IMAGE_URL || '').trim();
+      
+      const pParts = parseImageName(prev.CSOR_IMAGE_NAME);
+      const cParts = parseImageName(current.CSOR_IMAGE_NAME);
 
-      if (pName !== cName) changes.push('IMAGE_NAME');
       if (pUrl !== cUrl) changes.push('URL');
-      if (String(prev.IMAGE_STATUS || '').trim() !== String(current.IMAGE_STATUS || '').trim()) changes.push('STATUS');
+      if (pParts.type !== cParts.type) changes.push('TYPE');
+      if (pParts.version !== cParts.version) changes.push('VERSION');
+      
+      // Fallback for general name change
+      if (changes.length === 0 && String(prev.CSOR_IMAGE_NAME || '').trim() !== String(current.CSOR_IMAGE_NAME || '').trim()) {
+        changes.push('IMAGE_NAME');
+      }
+      
+      if (String(prev.IMAGE_STATUS || '').trim() !== String(current.IMAGE_STATUS || '').trim()) {
+        changes.push('STATUS');
+      }
     } else if (prev || current) {
       changes.push(prev ? 'DELETED' : 'CREATED');
     }
