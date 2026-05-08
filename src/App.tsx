@@ -129,7 +129,7 @@ const ComparisonRow = React.memo(({
         height: style?.height || 'auto'
       }}
       className={cn(
-        "grid grid-cols-[48px_160px_1fr_1fr_70px_70px_120px] items-stretch border-b border-slate-100 transition-colors overflow-hidden relative",
+        "grid grid-cols-[48px_160px_1fr_1fr_120px_70px_70px] items-stretch border-b border-slate-100 transition-colors overflow-hidden relative",
         isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/10" : "hover:bg-slate-50/50"
       )}
       id={`row-${result.upc}`}
@@ -255,21 +255,8 @@ const ComparisonRow = React.memo(({
         </div>
       </div>
 
-      {/* Status */}
-      <div className="px-3 py-4 flex flex-col justify-center border-r border-slate-100 min-w-[70px]">
-        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V1 Type</span>
-        <span className="text-[10px] font-mono text-slate-600 font-bold">{result.prevType || '---'}</span>
-      </div>
-
-      <div className="px-3 py-4 flex flex-col justify-center border-r border-slate-100 min-w-[70px]">
-        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V2 Type</span>
-        <span className={cn(
-          "text-[10px] font-mono font-bold",
-          result.changes.includes('TYPE') ? "text-amber-600" : "text-slate-600"
-        )}>{result.currType || '---'}</span>
-      </div>
-
-      <div className="px-4 py-4 flex flex-col items-center justify-center min-w-[100px]">
+      {/* Status (Audit State) */}
+      <div className="px-4 py-4 flex flex-col items-center justify-center border-r border-slate-100 min-w-[120px]">
         {isChanged ? (
           <div className="flex flex-col items-center gap-1.5">
             <div className="px-2 py-1 bg-amber-100 text-amber-700 text-[9px] font-bold rounded border border-amber-200 uppercase tracking-tight shadow-sm flex items-center gap-1">
@@ -290,6 +277,21 @@ const ComparisonRow = React.memo(({
             Matched
           </div>
         )}
+      </div>
+
+      {/* T1 */}
+      <div className="px-3 py-4 flex flex-col justify-center items-center border-r border-slate-100 min-w-[70px]">
+        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V1 Type</span>
+        <span className="text-[10px] font-mono text-slate-600 font-bold">{result.prevType || '---'}</span>
+      </div>
+
+      {/* T2 */}
+      <div className="px-3 py-4 flex flex-col justify-center items-center min-w-[70px]">
+        <span className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">V2 Type</span>
+        <span className={cn(
+          "text-[10px] font-mono font-bold",
+          result.changes.includes('TYPE') ? "text-amber-600" : "text-slate-600"
+        )}>{result.currType || '---'}</span>
       </div>
     </div>
   );
@@ -488,33 +490,63 @@ export default function App() {
     }));
   };
 
-  const exportData = (mode: 'all' | 'changed' | 'selection') => {
-    const filterFn = mode === 'changed' 
-      ? (r: ComparisonResult) => r.hasChanged 
-      : mode === 'selection' 
-        ? (r: ComparisonResult) => selectedUpcs.has(r.upc)
-        : () => true;
+  const exportExcel = async (mode: 'all' | 'changed' | 'selection') => {
+    setIsProcessing(true);
+    setExportProgress(0);
+    setProcessingProgress('Preparing Excel data...');
+    
+    try {
+      const filterFn = mode === 'changed' 
+        ? (r: ComparisonResult) => r.hasChanged 
+        : mode === 'selection' 
+          ? (r: ComparisonResult) => selectedUpcs.has(r.upc)
+          : () => true;
 
-    const dataToExport = resultsFromWorker.filter(filterFn).map(r => ({
-      UPC: r.upc,
-      Audit_Status: r.auditStatus.toUpperCase(),
-      Change_Status: r.hasChanged ? 'Changed' : 'Same',
-      Change_Types: r.changes.join(', '),
-      Baseline_Type: r.prevType || '---',
-      Scored_Type: r.currType || '---',
-      Baseline_Version: r.prevVersion || '---',
-      Scored_Version: r.currVersion || '---',
-      Baseline_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
-      Scored_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
-      Baseline_URL: r.previous?.SOURCE_IMAGE_URL || '---',
-      Scored_URL: r.current?.SOURCE_IMAGE_URL || '---',
-      TABLE_ID: r.current?.TABLE_ID || r.previous?.TABLE_ID || '---'
-    }));
+      const baseRecords = resultsFromWorker.filter(filterFn);
+      const total = baseRecords.length;
+      const dataToExport = [];
+      const chunkSize = 250; 
 
-    const ws = XLSX.utils.json_to_sheet(dataToExport);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Comparison_Audit");
-    XLSX.writeFile(wb, `Image_Audit_${mode.toUpperCase()}_${new Date().toISOString().split('T')[0]}.xlsx`);
+      for (let i = 0; i < total; i += chunkSize) {
+        const chunk = baseRecords.slice(i, i + chunkSize);
+        const mappedChunk = chunk.map(r => ({
+          UPC: r.upc,
+          Audit_Status: r.auditStatus.toUpperCase(),
+          Change_Status: r.hasChanged ? 'Changed' : 'Same',
+          Change_Types: r.changes.join(', '),
+          Baseline_Type: r.prevType || '---',
+          Scored_Type: r.currType || '---',
+          Baseline_Version: r.prevVersion || '---',
+          Scored_Version: r.currVersion || '---',
+          Baseline_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
+          Scored_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
+          Baseline_URL: r.previous?.SOURCE_IMAGE_URL || '---',
+          Scored_URL: r.current?.SOURCE_IMAGE_URL || '---',
+          TABLE_ID: r.current?.TABLE_ID || r.previous?.TABLE_ID || '---'
+        }));
+        dataToExport.push(...mappedChunk);
+        
+        const progress = Math.min(100, Math.round(((i + chunk.length) / total) * 100));
+        setExportProgress(progress);
+        setProcessingProgress(`Formatting records: ${Math.min(i + chunkSize, total)} / ${total}`);
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      setProcessingProgress('Finalizing Excel workbook...');
+      await new Promise(r => setTimeout(r, 50));
+
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Comparison_Audit");
+      XLSX.writeFile(wb, `Image_Audit_${mode.toUpperCase()}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    } catch (err) {
+      console.error('Excel Export failed:', err);
+      alert('Excel export failed. If the dataset is very large, try filtering results first.');
+    } finally {
+      setIsProcessing(false);
+      setExportProgress(0);
+      setProcessingProgress('');
+    }
   };
 
   const getBase64Image = async (url: string): Promise<string | null> => {
@@ -558,10 +590,13 @@ export default function App() {
       
       for (const item of resultsToExport) {
         count++;
-        if (count % 5 === 0 || count === total) {
-          setExportProgress(Math.round((count / total) * 100));
-          setProcessingProgress(`Generating PDF: ${count} / ${total} records...`);
-          // Allow UI to breathe
+        // Update progress every record for the best granularity
+        const currentProgress = Math.round((count / total) * 100);
+        setExportProgress(currentProgress);
+        setProcessingProgress(`Generating PDF Page: ${count} / ${total}`);
+        
+        // Only yield to main thread every 2 records to balance speed and UI updates
+        if (count % 2 === 0 || count === total) {
           await new Promise(r => setTimeout(r, 0));
         }
 
@@ -668,12 +703,32 @@ export default function App() {
       y += 10;
 
       doc.setFontSize(14);
-      doc.text('Version Transitions', 15, y);
+      doc.text('Updated Assets Detail', 15, y);
       y += 10;
-      doc.setFontSize(9);
-      Object.entries(workerStats.versionChangeDistribution).forEach(([v, count]) => {
-        if (y > 270) { doc.addPage(); y = 20; }
-        doc.text(`${v}: ${count} records`, 20, y);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "bold");
+      doc.text('UPC', 20, y);
+      doc.text('Baseline Image Name', 50, y);
+      doc.text('Scored Image Name', 130, y);
+      y += 2;
+      doc.line(15, y, 195, y);
+      y += 5;
+      doc.setFont("helvetica", "normal");
+
+      resultsFromWorker.filter(r => r.hasChanged).forEach(r => {
+        if (y > 270) { 
+          doc.addPage(); 
+          y = 20; 
+          doc.setFont("helvetica", "bold");
+          doc.text('UPC', 20, y);
+          doc.text('Baseline Image Name', 50, y);
+          doc.text('Scored Image Name', 130, y);
+          y += 5;
+          doc.setFont("helvetica", "normal");
+        }
+        doc.text(String(r.upc), 20, y);
+        doc.text(String(r.previous?.CSOR_IMAGE_NAME || '---').substring(0, 40), 50, y);
+        doc.text(String(r.current?.CSOR_IMAGE_NAME || '---').substring(0, 40), 130, y);
         y += 5;
       });
 
@@ -733,48 +788,66 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="grid grid-cols-2 gap-12">
-                  <section>
+                  <section className="col-span-2">
                     <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                      <Layout className="w-4 h-4" /> Type Distribution
+                      <RefreshCw className="w-4 h-4" /> Updated Assets Detail
                     </h3>
-                    <div className="space-y-3">
-                      {Object.entries(workerStats.typeDistribution || {}).sort((a,b) => b[1] - a[1]).map(([type, count]) => (
-                        <div key={type} className="flex items-center justify-between group">
-                          <span className="text-sm font-bold text-slate-600 font-mono italic">{type || 'None'}</span>
-                          <div className="flex items-center gap-4 flex-1 ml-6">
-                            <div className="h-1.5 bg-slate-100 rounded-full flex-1 overflow-hidden">
-                              <motion.div 
-                                initial={{ width: 0 }}
-                                animate={{ width: `${(count / workerStats.totalMerged) * 100}%` }}
-                                className="h-full bg-blue-500 rounded-full"
-                              />
-                            </div>
-                            <span className="text-xs font-black text-slate-900 w-8 text-right">{count}</span>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="border border-slate-100 rounded-[24px] overflow-hidden">
+                      <table className="w-full text-left border-collapse">
+                        <thead className="bg-slate-50 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                          <tr>
+                            <th className="px-4 py-3 border-b border-slate-100">UPC</th>
+                            <th className="px-4 py-3 border-b border-slate-100">Baseline Name</th>
+                            <th className="px-4 py-3 border-b border-slate-100">Scored Name</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                          {resultsFromWorker.filter(r => r.hasChanged).slice(0, 100).map(r => (
+                            <tr key={r.upc} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-4 py-2.5 text-[11px] font-mono font-bold text-slate-700">{r.upc}</td>
+                              <td className="px-4 py-2.5 text-[10px] text-slate-500 truncate max-w-[200px]">{r.previous?.CSOR_IMAGE_NAME || '---'}</td>
+                              <td className="px-4 py-2.5 text-[10px] text-blue-600 font-medium truncate max-w-[200px]">{r.current?.CSOR_IMAGE_NAME || '---'}</td>
+                            </tr>
+                          ))}
+                          {workerStats.changed > 100 && (
+                            <tr>
+                              <td colSpan={3} className="px-4 py-3 text-center text-[10px] text-slate-400 font-bold uppercase bg-slate-50/50 italic">
+                                Showing top 100 updates. Download PDF for full list.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
                     </div>
-                  </section>
-
-                  <section>
-                    <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                      <RefreshCw className="w-4 h-4" /> Change Insights
-                    </h3>
-                    <div className="space-y-6">
-                       <div>
-                         <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">Version Transitions</p>
-                         <div className="flex flex-wrap gap-2">
-                           {Object.entries(workerStats.versionChangeDistribution || {}).map(([v, count]) => (
-                             <div key={v} className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl flex flex-col">
-                               <span className="text-[8px] text-slate-400 font-bold">{v}</span>
-                               <span className="text-sm font-bold text-blue-600">{count}</span>
+                    
+                    <div className="grid grid-cols-2 gap-12 mt-12">
+                      <section>
+                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                           <Layout className="w-4 h-4" /> Type Distribution
+                         </h3>
+                         <div className="space-y-3">
+                           {Object.entries(workerStats.typeDistribution || {}).sort((a,b) => b[1] - a[1]).map(([type, count]) => (
+                             <div key={type} className="flex items-center justify-between group">
+                               <span className="text-sm font-bold text-slate-600 font-mono italic">{type || 'None'}</span>
+                               <div className="flex items-center gap-4 flex-1 ml-6">
+                                 <div className="h-1.5 bg-slate-100 rounded-full flex-1 overflow-hidden">
+                                   <motion.div 
+                                     initial={{ width: 0 }}
+                                     animate={{ width: `${(count / workerStats.totalMerged) * 100}%` }}
+                                     className="h-full bg-blue-500 rounded-full"
+                                   />
+                                 </div>
+                                 <span className="text-xs font-black text-slate-900 w-8 text-right">{count}</span>
+                               </div>
                              </div>
                            ))}
                          </div>
-                       </div>
-                       <div>
-                         <p className="text-[10px] text-slate-400 font-bold uppercase mb-3">Type Transitions</p>
+                      </section>
+
+                      <section>
+                         <h3 className="text-xs font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                           <RefreshCw className="w-4 h-4" /> Type Transitions
+                         </h3>
                          <div className="flex flex-wrap gap-2">
                            {Object.entries(workerStats.typeChangeDistribution || {}).map(([t, count]) => (
                              <div key={t} className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl flex flex-col">
@@ -783,10 +856,9 @@ export default function App() {
                              </div>
                            ))}
                          </div>
-                       </div>
+                      </section>
                     </div>
                   </section>
-                </div>
               </div>
             </motion.div>
           </div>
@@ -843,10 +915,10 @@ export default function App() {
                   <Download className="w-3.5 h-3.5" /> Export Excel
                 </button>
                 <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-200 hidden group-hover:block overflow-hidden z-[100]">
-                  <button onClick={() => exportData('all')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 border-b border-slate-100 flex items-center gap-2 italic">
+                  <button onClick={() => exportExcel('all')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 border-b border-slate-100 flex items-center gap-2 italic">
                     <FileText className="w-3.5 h-3.5 text-blue-500" /> All Items Table
                   </button>
-                  <button onClick={() => exportData('changed')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2 italic">
+                  <button onClick={() => exportExcel('changed')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2 italic">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Only Changed Records
                   </button>
                 </div>
@@ -939,7 +1011,7 @@ export default function App() {
 
       <main className="flex-1 flex flex-col min-h-0 bg-white relative">
         {/* Table Header */}
-        <div className="grid grid-cols-[48px_160px_1fr_1fr_70px_70px_120px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
+        <div className="grid grid-cols-[48px_160px_1fr_1fr_120px_70px_70px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
           <div className="flex items-center justify-center border-r border-slate-200">
             <button 
               onClick={() => {
@@ -954,32 +1026,32 @@ export default function App() {
               {selectedUpcs.size === filteredResults.length && filteredResults.length > 0 && <CheckSquare className="w-3.5 h-3.5" />}
             </button>
           </div>
-          <div className="px-6 py-3 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('upc')}>
+          <div className="px-6 py-3 border-r border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('upc')}>
             <span>UPC / Identifier</span>
             {sortConfig.key === 'upc' ? (
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
-          <div className="px-6 py-3 border-l border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('prev_name')}>
+          <div className="px-6 py-3 border-r border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('prev_name')}>
             <span>Baseline Assignment (V1)</span>
             {sortConfig.key === 'prev_name' ? (
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
-          <div className="px-6 py-3 border-l border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('curr_name')}>
+          <div className="px-6 py-3 border-r border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('curr_name')}>
             <span>New Scoring Target</span>
             {sortConfig.key === 'curr_name' ? (
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
-          <div className="px-6 py-3 border-l border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('auditStatus')}>
+          <div className="px-3 py-3 border-r border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-center gap-2 group" onClick={() => toggleSort('auditStatus')}>
             <span>Audit State</span>
             {sortConfig.key === 'auditStatus' ? (
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
-            ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
+            ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30 text-slate-300" />}
           </div>
-          <div className="px-3 py-3 border-l border-slate-200 text-center">T1</div>
-          <div className="px-3 py-3 border-l border-slate-200 text-center">T2</div>
+          <div className="px-3 py-3 border-r border-slate-200 text-center">T1</div>
+          <div className="px-3 py-3 text-center">T2</div>
         </div>
 
         {/* List Content */}
@@ -1212,10 +1284,16 @@ export default function App() {
 
               <div className="flex-1 overflow-y-auto grid grid-cols-2 divide-x divide-slate-100 p-8 gap-8">
                 {/* Left Side */}
-                <div className="flex flex-col gap-6">
-                  <div className="flex items-center justify-between">
-                    <span className="px-3 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-full uppercase">Baseline Version</span>
-                    <span className="text-xs font-mono text-slate-400">ID: {previewItem.previous?.TABLE_ID || '---'}</span>
+                <div className="flex flex-col gap-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="px-3 py-1 bg-slate-100 text-slate-600 text-[10px] font-bold rounded-full uppercase">Baseline Version</span>
+                      <span className="text-xs font-mono text-slate-400">ID: {previewItem.previous?.TABLE_ID || '---'}</span>
+                    </div>
+                    <div className="bg-slate-50 rounded-lg py-2 px-3 border border-slate-100 overflow-hidden">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase leading-none mb-1">Image Name</p>
+                      <p className="text-[11px] font-mono font-bold text-slate-700 truncate">{previewItem.previous?.CSOR_IMAGE_NAME || 'Not Assigned'}</p>
+                    </div>
                   </div>
                   <div className="aspect-square bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-center overflow-hidden p-8 shadow-inner">
                     <img 
@@ -1225,17 +1303,25 @@ export default function App() {
                       referrerPolicy="no-referrer"
                     />
                   </div>
-                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase mb-2">Baseline Filename</p>
-                    <p className="text-sm font-mono break-all font-bold text-slate-600">{previewItem.previous?.CSOR_IMAGE_NAME || 'Not Assigned'}</p>
-                  </div>
                 </div>
 
                 {/* Right Side */}
-                <div className="flex flex-col gap-6 pl-8">
-                  <div className="flex items-center justify-between">
-                    <span className="px-3 py-1 bg-blue-100 text-blue-600 text-[10px] font-bold rounded-full uppercase">New Scored Version</span>
-                    <span className="text-xs font-mono text-slate-400">ID: {previewItem.current?.TABLE_ID || '---'}</span>
+                <div className="flex flex-col gap-4 pl-8">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="px-3 py-1 bg-blue-100 text-blue-600 text-[10px] font-bold rounded-full uppercase">New Scored Version</span>
+                      <span className="text-xs font-mono text-slate-400">ID: {previewItem.current?.TABLE_ID || '---'}</span>
+                    </div>
+                    <div className={cn(
+                      "rounded-lg py-2 px-3 border overflow-hidden",
+                      previewItem.hasChanged ? "bg-blue-50 border-blue-200" : "bg-slate-50 border-slate-100"
+                    )}>
+                      <p className="text-[10px] font-bold text-blue-400 uppercase leading-none mb-1">Image Name</p>
+                      <p className={cn(
+                        "text-[11px] font-mono font-bold truncate",
+                        previewItem.hasChanged ? "text-blue-700" : "text-slate-700"
+                      )}>{previewItem.current?.CSOR_IMAGE_NAME || 'Removed'}</p>
+                    </div>
                   </div>
                   <div className={cn(
                     "aspect-square rounded-2xl border flex items-center justify-center overflow-hidden p-8 shadow-inner transition-colors",
@@ -1247,16 +1333,6 @@ export default function App() {
                       className="max-w-full max-h-full object-contain mix-blend-multiply"
                       referrerPolicy="no-referrer"
                     />
-                  </div>
-                  <div className={cn(
-                    "rounded-xl p-4 border transition-colors",
-                    previewItem.hasChanged ? "bg-blue-50 border-blue-100" : "bg-slate-50 border-slate-100"
-                  )}>
-                    <p className="text-[10px] font-bold text-blue-400 uppercase mb-2">New Target Filename</p>
-                    <p className={cn(
-                      "text-sm font-mono break-all font-bold",
-                      previewItem.hasChanged ? "text-blue-700" : "text-slate-600"
-                    )}>{previewItem.current?.CSOR_IMAGE_NAME || 'Removed'}</p>
                   </div>
                 </div>
               </div>
