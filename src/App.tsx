@@ -19,11 +19,21 @@ import {
   Columns,
   RefreshCw,
   Info,
-  Database
+  Database,
+  CheckSquare,
+  Square,
+  FileText,
+  Eye,
+  EyeOff,
+  Trash2,
+  MoreVertical,
+  Camera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -55,19 +65,25 @@ interface ComparisonResult {
   current: ImageItem | null;
   hasChanged: boolean;
   changes: string[];
+  auditStatus: 'pending' | 'reviewed' | 'ignored';
 }
 
-type SortKey = 'upc' | 'prev_name' | 'curr_name' | 'status';
+type FilterStatus = 'all' | 'changed' | 'reviewed' | 'ignored';
+type SortKey = 'upc' | 'prev_name' | 'curr_name' | 'status' | 'auditStatus';
 type SortOrder = 'asc' | 'desc';
 
 // --- Components ---
 
 const ComparisonRow = ({ 
   result, 
-  onPreview 
+  onPreview,
+  isSelected,
+  onSelect
 }: { 
   result: ComparisonResult; 
   onPreview: (res: ComparisonResult) => void;
+  isSelected: boolean;
+  onSelect: (upc: string) => void;
   key?: string;
 }) => {
   const isChanged = result.hasChanged;
@@ -78,19 +94,38 @@ const ComparisonRow = ({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       className={cn(
-        "grid grid-cols-[160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors",
-        isChanged ? "bg-blue-50/5" : "hover:bg-slate-50/50"
+        "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors",
+        isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/5" : "hover:bg-slate-50/50"
       )}
+      id={`row-${result.upc}`}
     >
+      {/* Selection */}
+      <div className="flex items-center justify-center border-r border-slate-100">
+        <button 
+          onClick={() => onSelect(result.upc)}
+          className={cn(
+            "w-5 h-5 rounded flex items-center justify-center transition-all",
+            isSelected ? "bg-blue-600 text-white" : "border border-slate-300 text-transparent hover:border-blue-400"
+          )}
+        >
+          {isSelected && <CheckSquare className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+
       {/* UPC / Meta */}
-      <div className="px-6 py-4 flex flex-col justify-center border-r border-slate-100">
+      <div className="px-6 py-4 flex flex-col justify-center border-r border-slate-100 italic">
         <span className="text-sm font-bold text-slate-900 font-mono tracking-tight">{result.upc}</span>
-        <span className="text-[10px] text-slate-400 font-mono mt-1">ID: {result.current?.TABLE_ID || result.previous?.TABLE_ID}</span>
-        {(result.current?.GL || result.previous?.GL) && (
-          <span className="mt-2 px-1.5 py-0.5 bg-slate-100 text-[9px] font-bold rounded text-slate-500 w-fit uppercase tracking-tighter">
-            {result.current?.GL || result.previous?.GL}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 mt-1">
+          <span className="text-[10px] text-slate-400 font-mono">ID: {result.current?.TABLE_ID || result.previous?.TABLE_ID}</span>
+          {result.auditStatus !== 'pending' && (
+            <span className={cn(
+              "text-[8px] px-1 rounded font-bold uppercase",
+              result.auditStatus === 'reviewed' ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+            )}>
+              {result.auditStatus}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Previous Version */}
@@ -180,10 +215,12 @@ export default function App() {
   const [prevData, setPrevData] = useState<ImageItem[] | null>(null);
   const [newData, setNewData] = useState<ImageItem[] | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'changed'>('changed');
+  const [filter, setFilter] = useState<FilterStatus>('changed');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: SortKey; order: SortOrder }>({ key: 'upc', order: 'asc' });
   const [previewItem, setPreviewItem] = useState<ComparisonResult | null>(null);
+  const [userStatus, setUserStatus] = useState<Record<string, 'pending' | 'reviewed' | 'ignored'>>({});
+  const [selectedUpcs, setSelectedUpcs] = useState<Set<string>>(new Set());
 
   const handleFileUpload = (type: 'prev' | 'new') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -240,12 +277,13 @@ export default function App() {
         previous: prev,
         current,
         hasChanged: changes.length > 0,
-        changes
+        changes,
+        auditStatus: userStatus[upc] || 'pending'
       };
     });
 
     return results;
-  }, [prevData, newData]);
+  }, [prevData, newData, userStatus]);
 
   const filteredResults = useMemo(() => {
     let results = [...comparisonResults];
@@ -258,6 +296,10 @@ export default function App() {
     // Filter
     if (filter === 'changed') {
       results = results.filter(r => r.hasChanged);
+    } else if (filter === 'reviewed') {
+      results = results.filter(r => r.auditStatus === 'reviewed');
+    } else if (filter === 'ignored') {
+      results = results.filter(r => r.auditStatus === 'ignored');
     }
 
     // Sort
@@ -278,8 +320,12 @@ export default function App() {
           valA = a.current?.CSOR_IMAGE_NAME || '';
           valB = b.current?.CSOR_IMAGE_NAME || '';
           break;
+        case 'auditStatus':
+          valA = a.auditStatus;
+          valB = b.auditStatus;
+          break;
         case 'status':
-          valA = a.hasChanged ? 'B' : 'A'; // Group matched first, then updated
+          valA = a.hasChanged ? 'B' : 'A';
           valB = b.hasChanged ? 'B' : 'A';
           break;
       }
@@ -296,9 +342,31 @@ export default function App() {
     return {
       total: comparisonResults.length,
       changed: comparisonResults.filter(r => r.hasChanged).length,
-      same: comparisonResults.filter(r => !r.hasChanged).length
+      same: comparisonResults.filter(r => !r.hasChanged).length,
+      reviewed: comparisonResults.filter(r => r.auditStatus === 'reviewed').length,
+      ignored: comparisonResults.filter(r => r.auditStatus === 'ignored').length
     };
   }, [comparisonResults]);
+
+  const handleSelect = (upc: string) => {
+    setSelectedUpcs(prev => {
+      const next = new Set(prev);
+      if (next.has(upc)) next.delete(upc);
+      else next.add(upc);
+      return next;
+    });
+  };
+
+  const handleBulkAction = (action: 'reviewed' | 'ignored' | 'pending') => {
+    setUserStatus(prev => {
+      const next = { ...prev };
+      selectedUpcs.forEach(upc => {
+        next[upc] = action;
+      });
+      return next;
+    });
+    setSelectedUpcs(new Set());
+  };
 
   const toggleSort = (key: SortKey) => {
     setSortConfig(prev => ({
@@ -307,21 +375,113 @@ export default function App() {
     }));
   };
 
-  const exportData = () => {
-    const dataToExport = filteredResults.map(r => ({
+  const exportData = (mode: 'all' | 'changed' | 'selection') => {
+    const filterFn = mode === 'changed' 
+      ? (r: ComparisonResult) => r.hasChanged 
+      : mode === 'selection' 
+        ? (r: ComparisonResult) => selectedUpcs.has(r.upc)
+        : () => true;
+
+    const dataToExport = comparisonResults.filter(filterFn).map(r => ({
       UPC: r.upc,
-      Status: r.hasChanged ? 'Changed' : 'Same',
+      Audit_Status: r.auditStatus.toUpperCase(),
+      Change_Status: r.hasChanged ? 'Changed' : 'Same',
       Change_Types: r.changes.join(', '),
-      Prev_Image_Name: r.previous?.CSOR_IMAGE_NAME || 'N/A',
-      New_Image_Name: r.current?.CSOR_IMAGE_NAME || 'N/A',
-      Prev_URL: r.previous?.SOURCE_IMAGE_URL || 'N/A',
-      New_URL: r.current?.SOURCE_IMAGE_URL || 'N/A',
+      Prev_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
+      New_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
+      Prev_URL: r.previous?.SOURCE_IMAGE_URL || '---',
+      New_URL: r.current?.SOURCE_IMAGE_URL || '---',
+      TABLE_ID: r.current?.TABLE_ID || r.previous?.TABLE_ID || '---'
     }));
 
     const ws = XLSX.utils.json_to_sheet(dataToExport);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Comparison");
-    XLSX.writeFile(wb, `Image_Audit_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "Comparison_Audit");
+    XLSX.writeFile(wb, `Image_Audit_${mode.toUpperCase()}_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
+  const exportPDF = async () => {
+    setIsProcessing(true);
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4');
+      const resultsToExport = filteredResults.slice(0, 50); // Safety limit for PDF size
+      
+      // Styles
+      const primaryColor = [15, 23, 42]; // slate-900
+      const accentColor = [37, 99, 235]; // blue-600
+      
+      doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+      doc.rect(0, 0, 210, 40, 'F');
+      
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(22);
+      doc.setFont("helvetica", "bold");
+      doc.text('IMAGE SCORING AUDIT', 15, 20);
+      
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "normal");
+      doc.text(`Generated: ${new Date().toLocaleString()}`, 15, 30);
+      doc.text(`View: ${filter.toUpperCase()} | Total Records: ${resultsToExport.length}`, 195, 30, { align: 'right' });
+      
+      let y = 50;
+      
+      for (const item of resultsToExport) {
+        if (y > 250) {
+          doc.addPage();
+          y = 20;
+        }
+
+        // Row background
+        doc.setFillColor(248, 250, 252);
+        doc.rect(15, y, 180, 35, 'F');
+        doc.setDrawColor(226, 232, 240);
+        doc.rect(15, y, 180, 35, 'S');
+
+        // UPC
+        doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.text(`UPC: ${item.upc}`, 20, y + 8);
+        
+        // Status Badge
+        const statusText = item.auditStatus.toUpperCase();
+        doc.setFontSize(7);
+        doc.text(`AUDIT STATE: ${statusText}`, 20, y + 14);
+        
+        // Change info
+        if (item.hasChanged) {
+          doc.setTextColor(220, 38, 38);
+          doc.text(`CHANGES: ${item.changes.join(', ')}`, 20, y + 18);
+        }
+
+        // Columns
+        doc.setTextColor(100, 116, 139);
+        doc.setFontSize(8);
+        doc.text('BASELINE (V1)', 20, y + 24);
+        doc.text('SCORED DATA', 105, y + 24);
+        
+        doc.setTextColor(primaryColor[0], primaryColor[1], primaryColor[2]);
+        doc.setFontSize(7);
+        doc.text(String(item.previous?.CSOR_IMAGE_NAME || 'EMPTY').substring(0, 55), 20, y + 29);
+        doc.text(String(item.current?.CSOR_IMAGE_NAME || 'REMOVED').substring(0, 55), 105, y + 29);
+
+        // Divider
+        doc.setDrawColor(234, 179, 8); // amber border if changed
+        if (item.hasChanged) {
+          doc.setLineWidth(0.5);
+          doc.line(15, y, 15, y + 35);
+          doc.setLineWidth(0.2);
+        }
+
+        y += 42;
+      }
+      
+      doc.save(`Audit_Export_${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error('PDF Export failed:', err);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -338,21 +498,36 @@ export default function App() {
         <div className="flex items-center gap-4 text-xs">
           {prevData && (
             <span className="px-3 py-1.5 bg-slate-700/50 rounded-full border border-slate-600/50">
-              Baseline: <strong className="ml-1 text-slate-100">{prevData.length} records</strong>
+              Baseline: <strong className="ml-1 text-slate-100">{prevData.length}</strong>
             </span>
           )}
           {newData && (
             <span className="px-3 py-1.5 bg-slate-700/50 rounded-full border border-slate-600/50">
-              Target: <strong className="ml-1 text-blue-300">{newData.length} records</strong>
+              Target: <strong className="ml-1 text-blue-300">{newData.length}</strong>
             </span>
           )}
           {comparisonResults.length > 0 && (
-            <button 
-              onClick={exportData}
-              className="bg-blue-600 hover:bg-blue-500 px-5 py-2 rounded-md font-bold transition-all flex items-center gap-2 shadow-sm active:scale-95"
-            >
-              <Download className="w-3.5 h-3.5" /> Export Audit
-            </button>
+            <div className="flex items-center gap-2">
+              <div className="relative group">
+                <button className="bg-slate-700 hover:bg-slate-600 px-4 py-2 rounded-md font-bold transition-all flex items-center gap-2">
+                  <Download className="w-3.5 h-3.5" /> Export Excel
+                </button>
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-200 hidden group-hover:block overflow-hidden z-[100]">
+                  <button onClick={() => exportData('all')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 border-b border-slate-100 flex items-center gap-2 italic">
+                    <FileText className="w-3.5 h-3.5 text-blue-500" /> All Items Table
+                  </button>
+                  <button onClick={() => exportData('changed')} className="w-full px-4 py-3 text-left text-xs font-bold text-slate-700 hover:bg-slate-50 flex items-center gap-2 italic">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-500" /> Only Changed Records
+                  </button>
+                </div>
+              </div>
+              <button 
+                onClick={exportPDF}
+                className="bg-red-600 hover:bg-red-500 px-4 py-2 rounded-md font-bold transition-all flex items-center gap-2 shadow-sm"
+              >
+                <Camera className="w-3.5 h-3.5" /> PDF Report
+              </button>
+            </div>
           )}
         </div>
       </header>
@@ -360,24 +535,25 @@ export default function App() {
       {/* Nav / Filters */}
       <nav className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center shrink-0 shadow-sm z-40">
         <div className="flex gap-1 p-1 bg-slate-100 rounded-lg border border-slate-200">
-          <button 
-            onClick={() => setFilter('all')}
-            className={cn(
-              "px-4 py-1.5 rounded-md text-xs font-bold transition-all",
-              filter === 'all' ? "bg-white shadow-sm text-slate-800" : "text-slate-500 hover:text-slate-700"
-            )}
-          >
-            All Items ({stats.total})
-          </button>
-          <button 
-            onClick={() => setFilter('changed')}
-            className={cn(
-              "px-4 py-1.5 rounded-md text-xs font-bold transition-all",
-              filter === 'changed' ? "bg-white shadow-sm text-blue-600" : "text-slate-500 hover:text-slate-700"
-            )}
-          >
-            Changed Only ({stats.changed})
-          </button>
+          {[
+            { id: 'all', label: 'All', count: stats.total, color: 'slate' },
+            { id: 'changed', label: 'Δ Changed', count: stats.changed, color: 'blue' },
+            { id: 'reviewed', label: '✓ Reviewed', count: stats.reviewed, color: 'emerald' },
+            { id: 'ignored', label: '✕ Ignored', count: stats.ignored, color: 'orange' }
+          ].map(f => (
+            <button 
+              key={f.id}
+              onClick={() => setFilter(f.id as FilterStatus)}
+              className={cn(
+                "px-3 py-1.5 rounded-md text-[10px] font-bold transition-all uppercase tracking-tight",
+                filter === f.id 
+                  ? `bg-white shadow-sm text-${f.color === 'slate' ? 'slate-800' : f.color + '-600'}` 
+                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-200/50"
+              )}
+            >
+              {f.label} ({f.count})
+            </button>
+          ))}
         </div>
 
         <div className="flex items-center gap-6">
@@ -400,7 +576,21 @@ export default function App() {
 
       <main className="flex-1 flex flex-col min-h-0 bg-white relative">
         {/* Table Header */}
-        <div className="grid grid-cols-[160px_1fr_1fr_120px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
+        <div className="grid grid-cols-[48px_160px_1fr_1fr_120px] border-b border-slate-200 bg-slate-50/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 z-30 select-none">
+          <div className="flex items-center justify-center border-r border-slate-200">
+            <button 
+              onClick={() => {
+                if (selectedUpcs.size === filteredResults.length) setSelectedUpcs(new Set());
+                else setSelectedUpcs(new Set(filteredResults.map(r => r.upc)));
+              }}
+              className={cn(
+                "w-5 h-5 rounded flex items-center justify-center transition-all",
+                selectedUpcs.size === filteredResults.length && filteredResults.length > 0 ? "bg-blue-600 text-white" : "border border-slate-300"
+              )}
+            >
+              {selectedUpcs.size === filteredResults.length && filteredResults.length > 0 && <CheckSquare className="w-3.5 h-3.5" />}
+            </button>
+          </div>
           <div className="px-6 py-3 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('upc')}>
             <span>UPC / Identifier</span>
             {sortConfig.key === 'upc' ? (
@@ -419,16 +609,53 @@ export default function App() {
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
-          <div className="px-6 py-3 border-l border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('status')}>
-            <span>Audit Status</span>
-            {sortConfig.key === 'status' ? (
+          <div className="px-6 py-3 border-l border-slate-200 cursor-pointer hover:bg-slate-100 flex items-center justify-between group" onClick={() => toggleSort('auditStatus')}>
+            <span>Audit State</span>
+            {sortConfig.key === 'auditStatus' ? (
               sortConfig.order === 'asc' ? <ChevronUp className="w-3 h-3 text-blue-500" /> : <ChevronDown className="w-3 h-3 text-blue-500" />
             ) : <RefreshCw className="w-3 h-3 opacity-0 group-hover:opacity-30" />}
           </div>
         </div>
 
         {/* List Content */}
-        <div className="flex-1 overflow-y-auto no-scrollbar">
+        <div className="flex-1 overflow-y-auto no-scrollbar relative" id="audit-table-body">
+          {/* Bulk Action Bar */}
+          <AnimatePresence>
+            {selectedUpcs.size > 0 && (
+              <motion.div 
+                initial={{ y: 50, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 50, opacity: 0 }}
+                className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-[#0F172A] text-white px-6 py-3 rounded-2xl shadow-2xl z-[100] flex items-center gap-8 border border-white/10"
+              >
+                <div className="flex items-center gap-3 pr-8 border-r border-white/20 font-bold italic">
+                  <span className="text-blue-400 font-mono text-lg">{selectedUpcs.size}</span>
+                  <span className="text-xs uppercase tracking-widest text-slate-400">Rows Active</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button 
+                    onClick={() => handleBulkAction('reviewed')}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Reviewed
+                  </button>
+                  <button 
+                    onClick={() => handleBulkAction('ignored')}
+                    className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                  >
+                    <EyeOff className="w-3.5 h-3.5" /> Ignore
+                  </button>
+                  <button 
+                    onClick={() => handleBulkAction('pending')}
+                    className="px-4 py-2 text-red-400 hover:text-red-300 rounded-lg text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 transition-all"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Reset
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {!prevData && !newData ? (
             <div className="h-full flex flex-col items-center justify-center p-20">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
@@ -451,8 +678,8 @@ export default function App() {
                       <FileUp className="w-8 h-8" />
                     </div>
                     <div className="text-center">
-                      <p className="font-bold text-slate-700">Scored Target</p>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload New Scoring Library</p>
+                      <p className="font-bold text-slate-700">SCORED DATA</p>
+                      <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload New Scored Data</p>
                     </div>
                   </div>
                 </div>
@@ -483,6 +710,8 @@ export default function App() {
                       key={result.upc} 
                       result={result} 
                       onPreview={(res) => setPreviewItem(res)}
+                      isSelected={selectedUpcs.has(result.upc)}
+                      onSelect={handleSelect}
                     />
                   ))
                 ) : (
