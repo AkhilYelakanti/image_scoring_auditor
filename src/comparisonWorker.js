@@ -125,27 +125,18 @@ self.onmessage = (e) => {
     
     const changes = [];
     if (prev && current) {
-      const pUrl = String(prev.SOURCE_IMAGE_URL || '').trim();
-      const cUrl = String(current.SOURCE_IMAGE_URL || '').trim();
-      
       const pParts = parseImageName(prev.CSOR_IMAGE_NAME);
       const cParts = parseImageName(current.CSOR_IMAGE_NAME);
 
-      if (pUrl !== cUrl) changes.push('URL');
       if (pParts.type !== cParts.type) changes.push('TYPE');
       if (pParts.version !== cParts.version) changes.push('VERSION');
       
-      // Fallback for general name change
-      if (changes.length === 0 && String(prev.CSOR_IMAGE_NAME || '').trim() !== String(current.CSOR_IMAGE_NAME || '').trim()) {
-        changes.push('IMAGE_NAME');
-      }
-      
+      // We are no longer tracking URL or general IMAGE_NAME changes per request
       if (String(prev.IMAGE_STATUS || '').trim() !== String(current.IMAGE_STATUS || '').trim()) {
         changes.push('STATUS');
       }
-    } else if (prev || current) {
-      changes.push(prev ? 'DELETED' : 'CREATED');
     }
+    // CREATED and DELETED logic removed - these rows will now show as "Matched" since they have no changes in the tracked fields
 
     const auditStatus = userStatus[upc] || 'pending';
 
@@ -166,10 +157,21 @@ self.onmessage = (e) => {
     same: results.filter(r => !r.hasChanged && r.previous && r.current).length,
     reviewed: Object.values(userStatus).filter(s => s === 'reviewed').length,
     ignored: Object.values(userStatus).filter(s => s === 'ignored').length,
+    ignoredNoImages: 0,
     totalPrev: prevMap.size,
     totalNew: newMap.size,
     totalMerged: results.length
   };
+
+  // Filter out results where BOTH versions have no image
+  const initialCount = results.length;
+  results = results.filter(r => {
+    const hasPrevImg = !!r.previous?.SOURCE_IMAGE_URL;
+    const hasCurrImg = !!r.current?.SOURCE_IMAGE_URL;
+    return hasPrevImg || hasCurrImg;
+  });
+  stats.ignoredNoImages = initialCount - results.length;
+  stats.totalMerged = results.length;
 
   // APPLY FILTERS & SORTING IN WORKER
   if (searchQuery) {

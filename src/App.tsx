@@ -288,6 +288,7 @@ export default function App() {
     same: 0,
     reviewed: 0,
     ignored: 0,
+    ignoredNoImages: 0,
     totalPrev: 0, 
     totalNew: 0, 
     totalMerged: 0 
@@ -474,10 +475,10 @@ export default function App() {
       Audit_Status: r.auditStatus.toUpperCase(),
       Change_Status: r.hasChanged ? 'Changed' : 'Same',
       Change_Types: r.changes.join(', '),
-      Prev_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
-      New_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
-      Prev_URL: r.previous?.SOURCE_IMAGE_URL || '---',
-      New_URL: r.current?.SOURCE_IMAGE_URL || '---',
+      Baseline_Image_Name: r.previous?.CSOR_IMAGE_NAME || '---',
+      Scored_Image_Name: r.current?.CSOR_IMAGE_NAME || '---',
+      Baseline_URL: r.previous?.SOURCE_IMAGE_URL || '---',
+      Scored_URL: r.current?.SOURCE_IMAGE_URL || '---',
       TABLE_ID: r.current?.TABLE_ID || r.previous?.TABLE_ID || '---'
     }));
 
@@ -505,7 +506,7 @@ export default function App() {
     setIsProcessing(true);
     try {
       const doc = new jsPDF('p', 'mm', 'a4');
-      const resultsToExport = filteredResults.slice(0, 50);
+      const resultsToExport = filteredResults;
       
       const primaryColor = [15, 23, 42];
       doc.setFillColor(primaryColor[0], primaryColor[1], primaryColor[2]);
@@ -611,6 +612,11 @@ export default function App() {
           {isAuditActive && (
             <span className="px-3 py-1.5 bg-blue-500/20 rounded-full border border-blue-500/30 text-blue-300">
               Unique Merged: <strong className="ml-1 text-white">{workerStats.totalMerged}</strong>
+            </span>
+          )}
+          {workerStats.ignoredNoImages > 0 && (
+            <span className="px-3 py-1.5 bg-red-950/30 rounded-full border border-red-900/30 text-red-300" title="Records with no images in both versions were automatically ignored">
+              Ignored (No Images): <strong className="ml-1 text-white">{workerStats.ignoredNoImages}</strong>
             </span>
           )}
           {resultsFromWorker.length > 0 && isAuditActive && (
