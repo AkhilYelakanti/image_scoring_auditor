@@ -160,7 +160,10 @@ const ComparisonRow = React.memo(({
 
       {/* Previous Version */}
       <div className="px-6 py-4 border-r border-slate-100 flex items-center gap-4 group cursor-zoom-in" onClick={() => onPreview(result)}>
-        <div className="w-16 h-16 bg-slate-50 rounded border border-slate-200 flex items-center justify-center shrink-0 relative overflow-hidden">
+        <div className={cn(
+          "bg-slate-50 rounded border border-slate-200 flex items-center justify-center shrink-0 relative overflow-hidden transition-all",
+          density === 'compact' ? "w-10 h-10" : density === 'standard' ? "w-16 h-16" : "w-32 h-32"
+        )}>
           <div className="absolute inset-0 bg-gradient-to-tr from-slate-200 to-transparent opacity-20"></div>
           {result.previous ? (
             <img 
@@ -174,11 +177,17 @@ const ComparisonRow = React.memo(({
               }}
             />
           ) : (
-            <span className="text-[9px] text-slate-300 font-bold uppercase z-10">Empty</span>
+            <span className={cn(
+              "text-slate-300 font-bold uppercase z-10",
+              density === 'large' ? "text-xs" : "text-[9px]"
+            )}>Empty</span>
           )}
         </div>
-        <div className="flex flex-col min-w-0 max-w-[200px]">
-          <span className="text-[11px] font-bold text-slate-700 truncate block">
+        <div className="flex flex-col min-w-0 max-w-[300px]">
+          <span className={cn(
+            "font-bold text-slate-700 truncate block",
+            density === 'large' ? "text-sm" : "text-[11px]"
+          )}>
             {result.previous?.CSOR_IMAGE_NAME || '---'}
           </span>
           <span className="text-[9px] text-slate-400 truncate mt-1 uppercase font-mono tracking-widest">
@@ -193,8 +202,9 @@ const ComparisonRow = React.memo(({
         isChanged ? "bg-blue-50/20" : "bg-slate-50/20"
       )} onClick={() => onPreview(result)}>
         <div className={cn(
-          "w-16 h-16 rounded border flex items-center justify-center shrink-0 shadow-sm relative overflow-hidden",
-          isChanged ? "bg-white border-blue-200 ring-2 ring-blue-500/5" : "bg-white border-slate-200"
+          "rounded border flex items-center justify-center shrink-0 shadow-sm relative overflow-hidden transition-all",
+          isChanged ? "bg-white border-blue-200 ring-2 ring-blue-500/5" : "bg-white border-slate-200",
+          density === 'compact' ? "w-10 h-10" : density === 'standard' ? "w-16 h-16" : "w-32 h-32"
         )}>
           {result.current ? (
             <img 
@@ -208,13 +218,17 @@ const ComparisonRow = React.memo(({
               }}
             />
           ) : (
-            <span className="text-[9px] text-slate-300 font-bold uppercase">Removed</span>
+            <span className={cn(
+              "text-slate-300 font-bold uppercase",
+              density === 'large' ? "text-xs" : "text-[9px]"
+            )}>Removed</span>
           )}
         </div>
-        <div className="flex flex-col min-w-0">
+        <div className="flex flex-col min-w-0 max-w-[300px]">
           <span className={cn(
-            "text-[11px] font-bold truncate",
-            isChanged ? "text-blue-700 underline decoration-blue-200 underline-offset-2" : "text-slate-700"
+            "font-bold truncate",
+            isChanged ? "text-blue-700 underline decoration-blue-200 underline-offset-2" : "text-slate-700",
+            density === 'large' ? "text-sm" : "text-[11px]"
           )}>
             {result.current?.CSOR_IMAGE_NAME || '---'}
           </span>
@@ -272,12 +286,29 @@ export default function App() {
     setSearchQuery('');
   };
 
-  // Handle resize for virtualization
+  const listContainerRef = React.useRef<HTMLDivElement>(null);
+
+  // Handle dynamic height for virtualization
   React.useEffect(() => {
-    const handleResize = () => setListHeight(window.innerHeight - 250);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    const updateHeight = () => {
+      if (listContainerRef.current) {
+        setListHeight(listContainerRef.current.clientHeight);
+      } else {
+        setListHeight(window.innerHeight - 320); // Fallback
+      }
+    };
+
+    const observer = new ResizeObserver(updateHeight);
+    if (listContainerRef.current) observer.observe(listContainerRef.current);
+    
+    updateHeight();
+    window.addEventListener('resize', updateHeight);
+    
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateHeight);
+    };
+  }, [isAuditActive]);
 
   const [debouncedSearch, setDebouncedSearch] = useState('');
   React.useEffect(() => {
@@ -314,16 +345,43 @@ export default function App() {
     }, 100);
   };
 
+  const getUpcValue = (item: any): string => {
+    if (!item) return '';
+    // Look for any key that contains "UPC", "GTIN", "IDENTIFIER", "EAN", "ITEM", or "CODE" case-insensitive
+    const keys = Object.keys(item);
+    const upcKey = keys.find(k => {
+      const lower = k.toLowerCase();
+      return lower.includes('upc') || 
+             lower.includes('gtin') || 
+             lower.includes('identifier') || 
+             lower.includes('ean') ||
+             (lower.includes('item') && lower.includes('id')) ||
+             (lower.includes('item') && lower.includes('code'));
+    });
+    
+    const val = upcKey ? item[upcKey] : (item.UPC || item.GTIN || item.ID);
+    return String(val || '').trim();
+  };
+
   const comparisonResults = useMemo(() => {
     if (!prevData && !newData) return [];
 
-    const allUpcs = new Set([
-      ...(prevData?.map(d => String(d.UPC)) || []),
-      ...(newData?.map(d => String(d.UPC)) || [])
-    ]);
+    const prevMap = new Map<string, ImageItem>();
+    prevData?.forEach(d => {
+      const u = getUpcValue(d);
+      if (u) prevMap.set(u, d);
+    });
 
-    const prevMap = new Map<string, ImageItem>(prevData?.map(d => [String(d.UPC), d]) || []);
-    const newMap = new Map<string, ImageItem>(newData?.map(d => [String(d.UPC), d]) || []);
+    const newMap = new Map<string, ImageItem>();
+    newData?.forEach(d => {
+      const u = getUpcValue(d);
+      if (u) newMap.set(u, d);
+    });
+
+    const allUpcs = new Set([
+      ...Array.from(prevMap.keys()),
+      ...Array.from(newMap.keys())
+    ]);
 
     const results: ComparisonResult[] = Array.from(allUpcs).map(upc => {
       const prev = prevMap.get(upc) || null;
@@ -331,10 +389,10 @@ export default function App() {
       
       const changes: string[] = [];
       if (prev && current) {
-        if (prev.CSOR_IMAGE_NAME !== current.CSOR_IMAGE_NAME) changes.push('IMAGE_NAME');
-        if (prev.SOURCE_IMAGE_URL !== current.SOURCE_IMAGE_URL) changes.push('URL');
-        if (prev.IMAGE_STATUS !== current.IMAGE_STATUS) changes.push('STATUS');
-        if (prev.PKG_NAME !== current.PKG_NAME) changes.push('PACKAGE');
+        if (String(prev.CSOR_IMAGE_NAME).trim() !== String(current.CSOR_IMAGE_NAME).trim()) changes.push('IMAGE_NAME');
+        if (String(prev.SOURCE_IMAGE_URL).trim() !== String(current.SOURCE_IMAGE_URL).trim()) changes.push('URL');
+        if (String(prev.IMAGE_STATUS).trim() !== String(current.IMAGE_STATUS).trim()) changes.push('STATUS');
+        if (String(prev.PKG_NAME).trim() !== String(current.PKG_NAME).trim()) changes.push('PACKAGE');
       } else if (prev || current) {
         changes.push(prev ? 'DELETED' : 'CREATED');
       }
@@ -859,16 +917,16 @@ export default function App() {
                 )}
               </AnimatePresence>
 
-              <div className="h-full">
-              {filteredResults.length > 0 ? (
-                <div className="h-full">
-                  {/* Virtualized List */}
-                  <div className="h-full" style={{ height: '100%' }}>
+              <div ref={listContainerRef} className="flex-1 relative overflow-hidden bg-white">
+                {filteredResults.length > 0 ? (
+                  <div className="h-full">
+                    {/* Virtualized List */}
                     <List
-                      style={{ height: listHeight, width: '100%' }}
+                      height={listHeight} 
                       rowCount={filteredResults.length}
                       rowHeight={rowHeights[rowDensity]} 
-                      className="no-scrollbar"
+                      className="scrollbar-custom"
+                      width="100%"
                       rowProps={{}}
                       rowComponent={({ index, style }: any) => (
                         <ComparisonRow 
@@ -882,14 +940,13 @@ export default function App() {
                       )}
                     />
                   </div>
-                </div>
-              ) : (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-20 flex flex-col items-center text-slate-400 font-medium h-full justify-center">
-                  <Search className="w-12 h-12 mb-4 opacity-10" />
-                  <p className="text-sm">No results match your active filters or sorting</p>
-                </motion.div>
-              )}
-            </div>
+                ) : (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-20 flex flex-col items-center text-slate-400 font-medium h-full justify-center">
+                    <Search className="w-12 h-12 mb-4 opacity-10" />
+                    <p className="text-sm">No results match your active filters or sorting</p>
+                  </motion.div>
+                )}
+              </div>
           </div>
         )}
       </div>
