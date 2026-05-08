@@ -34,6 +34,7 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import { List } from 'react-window';
 
 // --- Utilities ---
 function cn(...inputs: ClassValue[]) {
@@ -78,21 +79,20 @@ const ComparisonRow = ({
   result, 
   onPreview,
   isSelected,
-  onSelect
+  onSelect,
+  style
 }: { 
   result: ComparisonResult; 
   onPreview: (res: ComparisonResult) => void;
   isSelected: boolean;
   onSelect: (upc: string) => void;
-  key?: string;
+  style?: React.CSSProperties;
 }) => {
   const isChanged = result.hasChanged;
   
   return (
-    <motion.div 
-      layout
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+    <div 
+      style={style}
       className={cn(
         "grid grid-cols-[48px_160px_1fr_1fr_120px] items-stretch border-b border-slate-100 transition-colors",
         isSelected ? "bg-blue-50/40" : isChanged ? "bg-blue-50/5" : "hover:bg-slate-50/50"
@@ -207,7 +207,7 @@ const ComparisonRow = ({
           </div>
         )}
       </div>
-    </motion.div>
+    </div >
   );
 };
 
@@ -221,30 +221,48 @@ export default function App() {
   const [previewItem, setPreviewItem] = useState<ComparisonResult | null>(null);
   const [userStatus, setUserStatus] = useState<Record<string, 'pending' | 'reviewed' | 'ignored'>>({});
   const [selectedUpcs, setSelectedUpcs] = useState<Set<string>>(new Set());
+  const [listHeight, setListHeight] = useState(window.innerHeight - 250);
+
+  // Handle resize for virtualization
+  React.useEffect(() => {
+    const handleResize = () => setListHeight(window.innerHeight - 250);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleFileUpload = (type: 'prev' | 'new') => async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsProcessing(true);
-    try {
+    // Allow UI to update before heavy processing
+    setTimeout(() => {
       const reader = new FileReader();
       reader.onload = (evt) => {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws) as ImageItem[];
-        
-        if (type === 'prev') setPrevData(data);
-        else setNewData(data);
-        setIsProcessing(false);
+        try {
+          const data = new Uint8Array(evt.target?.result as ArrayBuffer);
+          const wb = XLSX.read(data, { type: 'array', cellDates: true, cellNF: false, cellText: false });
+          const wsname = wb.SheetNames[0];
+          const ws = wb.Sheets[wsname];
+          const jsonData = XLSX.utils.sheet_to_json(ws) as ImageItem[];
+          
+          if (type === 'prev') setPrevData(jsonData);
+          else setNewData(jsonData);
+        } catch (err) {
+          console.error('Processing error:', err);
+          alert('Error processing file. Please ensure it is a valid Excel/CSV.');
+        } finally {
+          setIsProcessing(false);
+        }
       };
-      reader.readAsBinaryString(file);
-    } catch (error) {
-      console.error('Error reading excel:', error);
-      setIsProcessing(false);
-    }
+      reader.readAsArrayBuffer(file);
+    }, 100);
   };
 
   const comparisonResults = useMemo(() => {
@@ -289,8 +307,8 @@ export default function App() {
     let results = [...comparisonResults];
     
     // Search
-    if (searchQuery) {
-      results = results.filter(r => r.upc.includes(searchQuery));
+    if (debouncedSearch) {
+      results = results.filter(r => r.upc.includes(debouncedSearch));
     }
 
     // Filter
@@ -618,7 +636,14 @@ export default function App() {
         </div>
 
         {/* List Content */}
-        <div className="flex-1 overflow-y-auto no-scrollbar relative" id="audit-table-body">
+        <div className="flex-1 relative" id="audit-table-body">
+          {isProcessing && (
+            <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] z-[200] flex flex-col items-center justify-center">
+              <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              <p className="mt-4 text-xs font-bold text-slate-600 uppercase tracking-widest animate-pulse">Processing Large Dataset...</p>
+            </div>
+          )}
+
           {/* Bulk Action Bar */}
           <AnimatePresence>
             {selectedUpcs.size > 0 && (
@@ -657,70 +682,82 @@ export default function App() {
           </AnimatePresence>
 
           {!prevData && !newData ? (
-            <div className="h-full flex flex-col items-center justify-center p-20">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
-                <div className="relative group">
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('prev')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                  <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
-                    <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
-                      <FileUp className="w-8 h-8" />
+            <div className="h-full overflow-y-auto no-scrollbar">
+              <div className="flex flex-col items-center justify-center p-20">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 w-full max-w-4xl">
+                  <div className="relative group">
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('prev')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                    <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
+                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
+                        <FileUp className="w-8 h-8" />
+                      </div>
+                      <div className="text-center">
+                        <p className="font-bold text-slate-700">Baseline Data (V1)</p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload Previous Reference</p>
+                      </div>
                     </div>
-                    <div className="text-center">
-                      <p className="font-bold text-slate-700">Baseline Data (V1)</p>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload Previous Reference</p>
+                  </div>
+                  <div className="relative group">
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('new')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
+                    <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
+                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
+                        <FileUp className="w-8 h-8" />
+                      </div>
+                      <div className="text-center">
+                        <p className="font-bold text-slate-700">SCORED DATA</p>
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload New Scored Data</p>
+                      </div>
                     </div>
                   </div>
                 </div>
-                <div className="relative group">
-                  <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload('new')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                  <div className="h-64 rounded-3xl border-2 border-dashed border-slate-200 bg-white flex flex-col items-center justify-center gap-4 transition-all group-hover:border-blue-500/50 group-hover:bg-blue-50/10 shadow-sm">
-                    <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-blue-500 transition-colors">
-                      <FileUp className="w-8 h-8" />
-                    </div>
-                    <div className="text-center">
-                      <p className="font-bold text-slate-700">SCORED DATA</p>
-                      <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Upload New Scored Data</p>
-                    </div>
+                <div className="mt-16 flex items-center gap-12 text-slate-400">
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-300">Phase 01</span>
+                    <span className="text-xs font-bold text-slate-400">Baseline Import</span>
                   </div>
-                </div>
-              </div>
-              <div className="mt-16 flex items-center gap-12 text-slate-400">
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-300">Phase 01</span>
-                  <span className="text-xs font-bold text-slate-400">Baseline Import</span>
-                </div>
-                <ArrowRight className="w-4 h-4 opacity-20" />
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-300">Phase 02</span>
-                  <span className="text-xs font-bold text-slate-400">New Scoring Feed</span>
-                </div>
-                <ArrowRight className="w-4 h-4 opacity-20" />
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-300">Phase 03</span>
-                  <span className="text-xs font-bold text-slate-400">Visual Verification</span>
+                  <ArrowRight className="w-4 h-4 opacity-20" />
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-300">Phase 02</span>
+                    <span className="text-xs font-bold text-slate-400">New Scoring Feed</span>
+                  </div>
+                  <ArrowRight className="w-4 h-4 opacity-20" />
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-[10px] font-bold text-slate-300">Phase 03</span>
+                    <span className="text-xs font-bold text-slate-400">Visual Verification</span>
+                  </div>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="divide-y divide-slate-100">
-              <AnimatePresence mode="popLayout">
-                {filteredResults.length > 0 ? (
-                  filteredResults.map((result) => (
-                    <ComparisonRow 
-                      key={result.upc} 
-                      result={result} 
-                      onPreview={(res) => setPreviewItem(res)}
-                      isSelected={selectedUpcs.has(result.upc)}
-                      onSelect={handleSelect}
+            <div className="h-full">
+              {filteredResults.length > 0 ? (
+                <div className="h-full">
+                  {/* Virtualized List */}
+                  <div className="h-full" style={{ height: '100%' }}>
+                    <List
+                      style={{ height: listHeight, width: '100%' }}
+                      rowCount={filteredResults.length}
+                      rowHeight={100} 
+                      className="no-scrollbar"
+                      rowProps={{}}
+                      rowComponent={({ index, style }) => (
+                        <ComparisonRow 
+                          result={filteredResults[index]} 
+                          onPreview={(res) => setPreviewItem(res)}
+                          isSelected={selectedUpcs.has(filteredResults[index].upc)}
+                          onSelect={handleSelect}
+                          style={style}
+                        />
+                      )}
                     />
-                  ))
-                ) : (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-20 flex flex-col items-center text-slate-400 font-medium">
-                    <Search className="w-12 h-12 mb-4 opacity-10" />
-                    <p className="text-sm">No results match your active filters or sorting</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+                </div>
+              ) : (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="py-20 flex flex-col items-center text-slate-400 font-medium h-full justify-center">
+                  <Search className="w-12 h-12 mb-4 opacity-10" />
+                  <p className="text-sm">No results match your active filters or sorting</p>
+                </motion.div>
+              )}
             </div>
           )}
         </div>
