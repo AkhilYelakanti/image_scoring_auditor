@@ -1,0 +1,6 @@
+{
+  "name": "Image Scoring Comparator",
+  "description": "Compare previous and new image scoring results from Excel files with visual side-by-side verification and change tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
